@@ -1,23 +1,12 @@
 #include <chrono>
+#include <algorithm>
 #include <sstream>
 #include "cli/cli.h"
 #include "misc.h"
-#include "chess/movegen.h"
-#include "chess/perft.h"
 
 namespace athena::cli {
 
-inline std::string format(std::uint64_t num) {
-    std::string s = std::to_string(num);
-    for (int i = static_cast<int>(s.size()) - 3; i > 0; i -= 3) s.insert(i, ",");
-    return s;
-}  
-
 CLI::CLI() {
-    const auto setup = chess::Castle::Setup::Modern;
-    const auto fen = chess::Position::startpos(setup);
-    pos_.set_setup(setup);
-    pos_.init(fen);
     registerCommands();
 }
 
@@ -26,9 +15,14 @@ void CLI::registerCommands() {
     commands_["isready"]    = [this](std::istream& is) { isready(is); };
     commands_["setoption"]  = [this](std::istream& is) { setoption(is); };
     commands_["ucinewgame"] = [this](std::istream& is) { ucinewgame(is); };
+    commands_["position"]   = [this](std::istream& is) { pos(is); };
     commands_["pos"]        = [this](std::istream& is) { pos(is); };
     commands_["go"]         = [this](std::istream& is) { go(is); };
     commands_["stop"]       = [this](std::istream& is) { stop(is); };
+    commands_["analyze"]    = [this](std::istream& is) { analyze(is); };
+    commands_["state"]      = [this](std::istream& is) { state(is); };
+    commands_["play"]       = [this](std::istream& is) { play(is); };
+    commands_["undo"]       = [this](std::istream& is) { undo(is); };
     commands_["quit"]       = [this](std::istream& is) { quit(is); };
     commands_["perft"]      = [this](std::istream& is) { perft(is); };
     commands_["print"]      = [this](std::istream& is) { print(is); };
@@ -92,6 +86,7 @@ void CLI::uci(std::istream&) {
     std::cout << "id name Athena " << misc::version() << "\n";
     std::cout << "id author " << misc::author() << "\n";
     std::cout << "option name Setup type combo default modern var modern var classic\n";
+    std::cout << "option name Hash type spin default 16 min 1 max 1024\n";
     std::cout << "uciok" << std::endl;
 }
 
@@ -116,55 +111,128 @@ void CLI::setoption(std::istream& args) {
 }
 
 void CLI::ucinewgame(std::istream&) {
+    engine_.newGame();
 }
 
 void CLI::pos(std::istream& args) {
 
     std::string token;
-    args >> token;
+    if (!(args >> token)) {
+        std::cout << "info string position expected startpos or fen\n";
+        return;
+    }
 
-    std::string fen;
     if (token == "startpos") {
-        if (args >> token) {
-            fen = token == "modern" ? 
-            chess::Position::startpos(chess::Castle::Setup::Modern ):
-            chess::Position::startpos(chess::Castle::Setup::Classic);
+        if (args >> token && (token == "modern" || token == "classic")) {
+            engine_.setSetup(token);
             args >> token;
-        } else {
-            std::cout << "info string expected modern or classic after 'startpos' command\n";
         }
+        engine_.newGame();
     } else if (token == "fen") {
-        if (args >> token) {
-            fen = token;
-            args >> token;
-        } else {
+        std::string fen;
+        if (!(args >> fen)) {
             std::cout << "info string expected FEN string after 'fen' command\n";
+            return;
         }
+        engine_.setPosition(fen);
+        args >> token;
     } else {
         std::cout << "info string position expected startpos or fen\n";
         return;
     }
 
-    pos_.init(fen);
-
     if (token == "moves") {
-        while (args >> token) pos_.make_move(token);
+        while (args >> token) {
+            if (!engine_.applyMove(token)) {
+                std::cout << "info string illegal move: " << token << '\n';
+                return;
+            }
+        }
     }
 }
 
-void CLI::go(std::istream&) {
+void CLI::go(std::istream& args) {
+    core::Search::Limits limits;
+    bool has_explicit_depth = false;
+    std::string token;
+    while (args >> token) {
+        if (token == "depth") {
+            args >> limits.depth;
+            has_explicit_depth = true;
+        } else if (token == "movetime") {
+            std::int64_t milliseconds = 0;
+            args >> milliseconds;
+            limits.move_time = std::chrono::milliseconds(std::max<std::int64_t>(1, milliseconds));
+        } else if (token == "infinite") {
+            limits.infinite = true;
+            limits.depth = 64;
+        }
+    }
+    if (limits.move_time.count() > 0 && !has_explicit_depth) {
+        limits.depth = 64;
+    }
+    engine_.go(limits);
 }
 
 void CLI::stop(std::istream&) {
+    engine_.stop();
+}
+
+void CLI::analyze(std::istream& args) {
+    core::Search::Limits limits;
+    std::size_t max_lines = 8;
+    std::uint64_t analysis_id = 0;
+    std::string token;
+    while (args >> token) {
+        if (token == "depth") {
+            args >> limits.depth;
+        } else if (token == "movetime") {
+            std::int64_t milliseconds = 0;
+            args >> milliseconds;
+            limits.move_time = std::chrono::milliseconds(
+                std::max<std::int64_t>(0, milliseconds));
+        } else if (token == "multipv") {
+            args >> max_lines;
+        } else if (token == "id") {
+            args >> analysis_id;
+        } else if (token == "infinite") {
+            limits.infinite = true;
+            limits.depth = 64;
+        }
+    }
+    max_lines = std::clamp<std::size_t>(max_lines, 1, 64);
+    engine_.analyze(limits, max_lines, analysis_id);
+}
+
+void CLI::state(std::istream&) {
+    engine_.state();
+}
+
+void CLI::play(std::istream& args) {
+    std::string move;
+    if (!(args >> move)) {
+        std::cout << "play error missing-move\n";
+    } else if (engine_.applyMove(move)) {
+        std::cout << "play ok " << move << '\n';
+    } else {
+        std::cout << "play illegal " << move << '\n';
+    }
+    engine_.state();
+}
+
+void CLI::undo(std::istream&) {
+    std::cout << (engine_.undoMove() ? "undo ok\n" : "undo empty\n");
+    engine_.state();
 }
 
 void CLI::quit(std::istream&) {
+    engine_.stop();
     std::exit(EXIT_SUCCESS);
 }
 
 void CLI::perft(std::istream& args) {
     int depth;
-    if (!(args >> depth)) {
+    if (!(args >> depth) || depth < 0) {
         std::cout << "Usage: perft <depth> [--split]\n";
         return;
     }
@@ -187,44 +255,19 @@ void CLI::perft(std::istream& args) {
         }
     }
 
-    auto pos = pos_;
-    uint64_t nodes = 0;
-
-    auto tic = std::chrono::high_resolution_clock::now();
-
-    if (split) {
-        chess::Move moves[chess::MOVE_NB];
-        int num_moves = chess::generate_legal_moves(pos, moves);
-
-        for (int i = 0; i < num_moves; ++i) {
-            const auto& move = moves[i];
-
-            pos.make_move(move);
-            uint64_t count = chess::perft(pos, depth - 1);
-            pos.undo_move(move);
-
-            nodes += count;
-            std::cout << move.uci() << ": " << count << '\n';
-        }
-    } else {
-        nodes = chess::perft(pos, depth);
+    if (split && depth == 0) {
+        std::cout << "Usage: perft <positive-depth> --split\n";
+        return;
     }
-
-    auto toc = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> elapsed = toc - tic;
-
-    std::cout << "nodes: " << format(nodes) << " "
-              << "time: "  << std::to_string(elapsed.count() * 1000.0) + " ms "
-              << "nps: "   << format(static_cast<uint64_t>(nodes / elapsed.count()))
-              << '\n';
+    engine_.perft(depth, split);
 }
 
 void CLI::print(std::istream& args) {
     std::string arg;
     if (!(args >> arg)) {
-        pos_.print(false);
+        engine_.print(false);
     } else if (arg == "--board16x16") {
-        pos_.print(true);
+        engine_.print(true);
     } else {
         std::cout << " Usage: print [--board16x16]\n\n";
         return;

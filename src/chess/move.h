@@ -47,15 +47,27 @@ public:
     auto policy() const noexcept { return static_cast<Move::Policy>((move_ >> 16) & 0b111); } 
     
     std::string uci(bool board16x16 = false) const noexcept {
+        if (is_null()) return "0000";
         std::string str = "";
         str += Square(source()).uci(board16x16);
         str += Square(target()).uci(board16x16);
-        str += evolve() == Piece::ID::Empty ? "" : std::to_string(Piece(evolve()).uci());
+        if (evolve() != Piece::ID::Empty) str += Piece(evolve()).uci();
         return str;
     }
 
+    constexpr bool is_null() const noexcept { return move_ == 0; }
+    constexpr std::uint32_t value() const noexcept { return move_; }
+
 private:
-    uint32_t move_;
+    uint32_t move_{0};
 };
+
+inline constexpr bool operator==(Move lhs, Move rhs) noexcept {
+    return lhs.value() == rhs.value();
+}
+
+inline constexpr bool operator!=(Move lhs, Move rhs) noexcept {
+    return !(lhs == rhs);
+}
 
 } // namespace athena

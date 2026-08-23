@@ -5,6 +5,7 @@
 #include <iostream>
 #include <iomanip>
 #include <cstring>
+#include <sstream>
 #include "position.h"
 #include "castle.h"
 #include "chess/bitboard.h"
@@ -76,8 +77,8 @@ void Position::make_move(Move move) noexcept {
     if (attacker.piece() == Piece::ID::Rook) {
         constexpr auto ks = Castle::Side::KingSide;
         constexpr auto qs = Castle::Side::QueenSide;
-        if (target == Castle::rook_source(setup_, turn_.id(), ks)) next_state.castle.pop(Castle(turn_.id(), ks)); else
-        if (target == Castle::rook_source(setup_, turn_.id(), qs)) next_state.castle.pop(Castle(turn_.id(), qs));
+        if (source == Castle::rook_source(setup_, turn_.id(), ks)) next_state.castle.pop(Castle(turn_.id(), ks)); else
+        if (source == Castle::rook_source(setup_, turn_.id(), qs)) next_state.castle.pop(Castle(turn_.id(), qs));
     }
 
     switch (policy)
@@ -117,11 +118,12 @@ void Position::make_move(Move move) noexcept {
         default: break;
     }
 
-    const auto reset =
-    (attacker.piece() == Piece::ID::Pawn ) |
-    (defender.piece() != Piece::ID::Empty);
-    next_state.fifty_move_clock = (
-    next_state.fifty_move_clock + 1) * (reset ^ 1);
+    const bool reset =
+        attacker.piece() == Piece::ID::Pawn ||
+        defender.piece() != Piece::ID::Empty;
+    next_state.fifty_move_clock = reset
+        ? 0
+        : static_cast<Clock>(curr_state.fifty_move_clock + 1);
 
     play_++;
     turn_ = turn_.next();
@@ -133,7 +135,6 @@ void Position::undo_move(Move move) noexcept {
     turn_ = turn_.prev();
     play_--;
 
-    auto& prev_state = state_[play_ + 0];
     auto& curr_state = state_[play_ + 1];
 
     const auto source = move.source();
@@ -144,7 +145,11 @@ void Position::undo_move(Move move) noexcept {
     const auto defender = curr_state.capture;
 
     pop_board(target, attacker);
-    set_board(source, attacker);
+    if (policy == Move::Policy::Evolve) {
+        set_board(source, PieceColor(turn_.id(), Piece::ID::Pawn));
+    } else {
+        set_board(source, attacker);
+    }
 
     if (defender != PieceColor::empty()) {
         set_board(target, defender);
@@ -175,9 +180,6 @@ void Position::undo_move(Move move) noexcept {
         }
 
         case Move::Policy::Evolve: {
-            pop_board(target, attacker);
-            set_board(target, defender);
-            set_board(source, PieceColor(turn().id(), Piece::ID::Pawn));
             if (move.enpass() != Color::ID::None) {
                 const auto pawn = PieceColor(move.enpass(), Piece::ID::Pawn);
                 set_board(source + Square::push(turn_.id(), 0), pawn);
@@ -399,14 +401,38 @@ void Position::set_pinned_checks_bitboards() noexcept {
 
 Bitboard Position::get_attackers_bitboard(Square sq, Color color, const Bitboard& occupied) const noexcept {
 
-    return ((bitboard(turn().next().id())  | 
-             bitboard(turn().prev().id())) & ( 
+    return ((bitboard(color.next().id())  |
+             bitboard(color.prev().id())) & (
         (get_slide_attacks<Piece::ID::Bishop>(sq, occupied) & (bitboard(Piece::ID::Bishop) | bitboard(Piece::ID::Queen))) |
         (get_slide_attacks<Piece::ID::Rook  >(sq, occupied) & (bitboard(Piece::ID::Rook  ) | bitboard(Piece::ID::Queen))) |
         (get_crawl_attacks<Piece::ID::Knight>(sq) & bitboard(Piece::ID::Knight))   |
         (get_crawl_attacks<Piece::ID::King  >(sq) & bitboard(Piece::ID::King  )))) |
         (get_pawn_attacks(sq, color.next().id())  & bitboard(Piece::ID::Pawn) & bitboard(color.prev().id())) |
         (get_pawn_attacks(sq, color.prev().id())  & bitboard(Piece::ID::Pawn) & bitboard(color.next().id()));
+}
+
+bool Position::consistent() const noexcept {
+    for (int square_index = 0; square_index < SQUARE_NB; ++square_index) {
+        const auto square_id = static_cast<Square::ID>(square_index);
+        const Square square(square_id);
+        const auto board_piece = board(square_id);
+
+        for (int piece_index = 0; piece_index < PIECE_NB; ++piece_index) {
+            const bool expected = board_piece != PieceColor::empty() &&
+                board_piece != PieceColor::stone() &&
+                static_cast<int>(board_piece.piece().id()) == piece_index;
+            if (bitboard(static_cast<Piece::ID>(piece_index)).has_bit(square) !=
+                expected) return false;
+        }
+        for (int color_index = 0; color_index < COLOR_NB; ++color_index) {
+            const bool expected = board_piece != PieceColor::empty() &&
+                board_piece != PieceColor::stone() &&
+                static_cast<int>(board_piece.color().id()) == color_index;
+            if (bitboard(static_cast<Color::ID>(color_index)).has_bit(square) !=
+                expected) return false;
+        }
+    }
+    return true;
 }
 
 void Position::init(const FEN& fen) noexcept {
@@ -492,7 +518,7 @@ void Position::init(const FEN& fen) noexcept {
     set_pinned_checks_bitboards();
 }
 
-auto Position::fen() const noexcept {
+Position::FEN Position::fen() const noexcept {
 
     const auto& st = state();
     std::string output = "";

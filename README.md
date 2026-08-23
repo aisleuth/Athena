@@ -19,7 +19,16 @@
 - [4PC Engines](#4pc-engines)
 - [Acknowledgements](#acknowledgements)
 ## Introduction
-*coming soon*
+Athena is a local engine for team four-player chess. Red and Yellow form one
+team; Blue and Green form the other. It provides legal move generation for the
+14x14 cross board and a team-aware alpha-beta search that can be driven
+through a UCI-style command-line protocol.
+
+This fork builds on [Ariana Hejazyan's original Athena engine](https://github.com/arianahejazyan/Athena)
+and adds a complete search stack and local analysis GUI: positional evaluation,
+quiescence search, a transposition table, coordinated-mate extensions, live
+iterative MultiPV analysis, an interactive board, and continuously updating
+rankings, progress, and best-move arrows.
 ## Getting Started
 To build Athena from source, run the following commands:
 ```bash
@@ -33,6 +42,45 @@ Launch the interactive CLI with:
 ./build/src/athena
 ```
 
+### Local graphical interface
+
+Athena includes a dependency-free local browser interface for analysis. After
+cloning the repository, the launcher will build the native engine when needed
+and start the GUI:
+
+```bash
+./run-gui.sh
+```
+
+Alternatively, build the engine yourself and start the Node.js 18+ server:
+
+```bash
+node gui/server.mjs
+```
+
+Then open [http://127.0.0.1:8787](http://127.0.0.1:8787). The GUI provides the
+full 14x14 cross board, click or drag movement with legal-move highlighting,
+a best-move arrow, ranked candidate evaluations and principal variations,
+undo/reset controls, and adjustable depth, search time, MultiPV, hash size,
+and starting setup. Analysis automatically refreshes after a move by default;
+an optional setting lets Athena play one best response as well.
+
+Ranked analysis uses iterative deepening and updates the move list, ratings,
+principal variations, and best-move arrow while the search is running. A
+search time of zero means unlimited analysis: Athena keeps advancing to deeper
+passes until `Stop` is pressed. The progress meter shows exact root-move
+completion for the current depth pass and live node/time totals; it resets as
+the engine enters each deeper pass. Checks and captures are searched before
+quiet root moves.
+
+Use `ATHENA_GUI_PORT` to select a different port or `ATHENA_ENGINE` to point at
+a non-default Athena executable.
+
+Run the test suite with:
+```bash
+ctest --test-dir build --output-on-failure
+```
+
 Athena's move generator is highly optimized, achieving approximately 120 Mnps (million nodes per second) in benchmarks. You can verify this yourself:
 ```bash
 ./build/tests/perft_bench --benchmark_counters_tabular=true
@@ -40,7 +88,9 @@ Athena's move generator is highly optimized, achieving approximately 120 Mnps (m
 
 ## Commands
 
-Athena is a UCI-compatible chess engine and supports all standard UCI commands.
+Athena supports the core UCI workflow plus four-player position and setup
+extensions. It is not yet a drop-in replacement for every two-player UCI
+option.
 
 ### UCI Commands
 
@@ -48,18 +98,27 @@ Athena is a UCI-compatible chess engine and supports all standard UCI commands.
 |---------------|-----------------------------------------------------------------------------|
 | `uci`         | Identifies the engine and returns its name, version, and supported options. |
 | `isready`     | Checks if the engine is ready; responds with `readyok` when synchronized.   |
-| `setoption`   | Sets a configuration option (e.g. `Hash`, `Threads`).                      |
+| `setoption`   | Sets a configuration option such as `Setup` or `Hash`.                     |
 | `ucinewgame`  | Notifies the engine that a new game is about to begin.                      |
-| `position`    | Sets the board position, optionally followed by a sequence of moves.        |
-| `go`          | Starts the search on the current position.                                  |
+| `position`    | Sets `startpos` or a four-player FEN, optionally followed by legal moves.   |
+| `go`          | Starts an asynchronous search (`depth`, `movetime`, or `infinite`).          |
 | `stop`        | Stops the current search as soon as possible.                               |
 | `quit`        | Shuts down the engine.                                                      |
+
+Example session:
+```text
+uci
+isready
+position startpos modern moves e1d3 a5c4
+go depth 5
+```
 
 ### UCI Options
 
 | Name    | Default  | Description                                                  |
 |---------|----------|--------------------------------------------------------------|
 | `Setup` | `modern` | Board setup variant to use (`modern` or `classic`).          |
+| `Hash`  | `16`     | Transposition-table size in MiB (`1` to `1024`).              |
 
 ### Debug Commands
 
@@ -79,8 +138,24 @@ Athena also provides additional commands for testing and debugging:
 - Negamax
 - Alpha-Beta pruning
 - Iterative deepening
+- Move ordering for captures, promotions, and checks against either opponent
+- Quiescence search through captures, promotions, forcing checks, and check evasions
+- Bounded check extensions for tactical and coordinated mating lines
+- Complete principal-variation output instead of only the root move
+- Zobrist-keyed transposition table with exact, lower, and upper bounds
+- Fixed-depth, fixed-movetime, infinite, and interruptible searches
 ### Evaluate
-- Material counting
+- Team-aware material counting
+- Central piece activity
+- Color-relative pawn advancement
+- Pawn shelter around both allied kings
+- Check pressure against either opposing king, including the opponent who moves later
+
+### Current limitations
+- Single search thread
+- Hand-tuned evaluation rather than a trained network
+- No built-in Chess.com connection (the local graphical interface is manual)
+- Team mode only; free-for-all scoring and elimination are not implemented
 ## 4PC Engines
 This is a list of active four-player chess (4PC) engines. Feel free to add your own engine here or ask me to include it. You can also find a list of four-player chess tools in the [Colosseum](https://github.com/arianahejazyan/Colosseum).
  

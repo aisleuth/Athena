@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Athena · Four-player chess analysis</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">A</div>
+      <div><h1>Athena</h1><p>Team four-player chess analysis</p></div>
+    </div>
+    <div class="engine-status"><span id="statusDot" class="status-dot"></span><span id="statusText">Connecting</span></div>
+  </header>
+
+  <main class="workspace">
+    <section class="board-panel">
+      <div class="player-tag yellow"><span>Yellow</span><small>Red team</small></div>
+      <div class="player-tag blue"><span>Blue</span><small>Blue team</small></div>
+      <div class="player-tag green"><span>Green</span><small>Blue team</small></div>
+      <div class="player-tag red"><span>Red</span><small>Red team</small></div>
+      <div id="boardShell" class="board-shell">
+        <div id="board" class="board" aria-label="Four-player chess board"></div>
+        <svg id="arrowLayer" class="arrow-layer" viewBox="0 0 14 14" preserveAspectRatio="none" aria-hidden="true">
+          <defs><marker id="bestArrow" markerWidth="2.4" markerHeight="2.4" refX="1.9" refY="1.2" orient="auto"><path d="M0,0 L2.4,1.2 L0,2.4 Z"></path></marker></defs>
+          <line id="bestMoveArrow" marker-end="url(#bestArrow)"></line>
+        </svg>
+      </div>
+      <div class="board-caption">
+        <span id="turnBadge" class="turn-badge red">Red to move</span>
+        <span id="boardHint">Click or drag a piece to make a legal move</span>
+      </div>
+    </section>
+
+    <aside class="sidebar">
+      <section class="card controls-card">
+        <div class="card-heading"><div><span class="eyebrow">Search controls</span><h2>Engine settings</h2></div><button id="analyzeButton" class="primary">Analyze</button></div>
+        <div class="control-grid">
+          <label><span>Depth <output id="depthValue">4</output></span><input id="depth" aria-label="Maximum depth" type="range" min="1" max="10" value="4"></label>
+          <label><span>Time <output id="timeValue">1000 ms</output></span><input id="moveTime" aria-label="Search time" type="range" min="0" max="10000" step="250" value="1000"></label>
+          <label><span>Lines</span><select id="multipv"><option>3</option><option selected>8</option><option>12</option><option>20</option></select></label>
+          <label><span>Hash</span><select id="hash"><option>16</option><option>32</option><option selected>64</option><option>128</option><option>256</option></select></label>
+          <label><span>Setup</span><select id="setup"><option value="modern">Modern</option><option value="classic">Classic</option></select></label>
+        </div>
+        <div class="toggle-row"><label class="switch-label"><input id="autoAnalyze" type="checkbox" checked><span>Analyze after each move</span></label><label class="switch-label"><input id="autoReply" type="checkbox"><span>Engine replies once</span></label></div>
+        <div id="searchProgress" class="search-progress" aria-live="polite">
+          <div class="progress-label"><span id="progressPhase">Waiting to search</span><span id="progressPercent">0%</span></div>
+          <div class="progress-track"><span id="progressFill"></span></div>
+          <div id="progressDetail" class="progress-detail">Progress is measured across root moves at the current depth.</div>
+        </div>
+        <div class="button-row"><button id="stopButton">Stop</button><button id="undoButton">Undo</button><button id="resetButton">Reset board</button><button id="playBestButton" class="accent" disabled>Play best</button></div>
+      </section>
+
+      <section class="card analysis-card">
+        <div class="analysis-header"><div><span class="eyebrow">Ranked choices</span><h2>Candidate moves</h2></div><div id="analysisMeta" class="analysis-meta">No analysis yet</div></div>
+        <div class="table-head"><span>#</span><span>Move</span><span>Evaluation</span><span>Line</span></div>
+        <div id="analysisList" class="analysis-list"><div class="empty-state"><span class="empty-icon">↗</span><p>Run an analysis to compare the strongest moves.</p></div></div>
+      </section>
+
+      <section class="card history-card">
+        <div class="analysis-header"><div><span class="eyebrow">Session</span><h2>Move history</h2></div></div>
+        <div id="moveHistory" class="move-history"><span class="muted">No moves played</span></div>
+      </section>
+    </aside>
+  </main>
+
+  <div id="toast" class="toast" role="status"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

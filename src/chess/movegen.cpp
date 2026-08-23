@@ -57,13 +57,17 @@ Move* generate_enpass_moves(const Position& pos, Move* moves, Square target) noe
     if (pos.board(source.id()) != PieceColor(color, Piece::ID::Pawn)) 
         return moves;
 
+    const auto captured = source + Square::push(color, 0);
+    if (pos.board(captured.id()) != PieceColor(enemy, Piece::ID::Pawn))
+        return moves;
+
     if (target.promotes(color))
         return add_evolve_moves(pos, moves, source, target, enemy);
 
     auto occ = pos.occupied();
     occ.set_bit(target);
     occ.pop_bit(source);
-    occ.pop_bit(source + Square::push(color, 0));
+    occ.pop_bit(captured);
     if (pos.get_attackers_bitboard(pos.royal(color), color, occ).any())
         return moves;
         
@@ -96,6 +100,12 @@ template<Color::ID color, Castle::Setup setup, Castle::Side side>
 Move* generate_castle_moves(const Position& pos, Move* moves) noexcept {
 
     if (!pos.state().castle.has(Castle(color, side)))
+        return moves;
+
+    if (pos.board(Castle::king_source(setup, color, side)) !=
+            PieceColor(color, Piece::ID::King) ||
+        pos.board(Castle::rook_source(setup, color, side)) !=
+            PieceColor(color, Piece::ID::Rook))
         return moves;
 
     if (

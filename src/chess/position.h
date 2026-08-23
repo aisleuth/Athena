@@ -14,7 +14,7 @@ class alignas(64) Position {
 public:
     using FEN   = std::string;
     using Clock = uint8_t;
-    using Depth = uint8_t;
+    using Depth = uint16_t;
 
     struct alignas(4) State // copy assignment optimized
     {
@@ -27,7 +27,7 @@ public:
     Position() noexcept = default;
 
     void init(const FEN& fen) noexcept;
-    auto fen() const noexcept;
+    FEN fen() const noexcept;
     void print(bool board16x16 = false) const;
 
     void set_setup(Castle::Setup setup) noexcept { setup_ = setup; }
@@ -59,6 +59,13 @@ public:
 
     bool legal(Move* move) const noexcept;
     Bitboard get_attackers_bitboard(Square sq, Color color, const Bitboard& occupancy) const noexcept;
+
+    bool in_check(Color::ID color) const noexcept {
+        return get_attackers_bitboard(royal(color), Color(color), occupied()).any();
+    }
+
+    bool in_check() const noexcept { return in_check(turn_.id()); }
+    bool consistent() const noexcept;
 
     const Bitboard& teammate() const noexcept { return occupancy_[play_][0]; }
     const Bitboard& opponent() const noexcept { return occupancy_[play_][1]; }

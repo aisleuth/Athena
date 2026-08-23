@@ -51,6 +51,15 @@ gtest_discover_tests(perft_test
     PROPERTIES TIMEOUT 120          # per-test timeout in seconds
 )
 
+add_executable(search_test search_test.cc)
+target_include_directories(search_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(search_test PRIVATE
+    search_lib
+    GTest::gtest_main
+    athena_options)
+
+gtest_discover_tests(search_test)
+
 # -------------------------
 # Benchmarks
 # -------------------------

@@ -2,7 +2,6 @@
 
 #include <iostream>
 #include <cstdint>
-#include <immintrin.h>
 #include "constants.h"
 #include "square.h"
 #include "color.h"
