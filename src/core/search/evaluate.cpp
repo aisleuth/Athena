@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include "chess/attacks.h"
+#include "chess/psqt.h"
 
 namespace athena::core {
 
@@ -110,7 +111,27 @@ Score evaluate_positional(const chess::Position& pos) noexcept {
 }
 
 Score evaluate(const chess::Position& pos) noexcept {
-    return evaluate_material(pos) + evaluate_positional(pos);
+    // Material and piece-square terms are maintained incrementally by
+    // Position (see chess/psqt.h); only the dynamic terms are computed here.
+    const auto perspective = pos.turn();
+    Score score = pos.psq(perspective.id()) + pos.psq(perspective.ally().id())
+        - pos.psq(perspective.next().id()) - pos.psq(perspective.prev().id());
+
+    for (int color_index = 0; color_index < chess::COLOR_NB; ++color_index) {
+        const auto color = static_cast<chess::Color::ID>(color_index);
+        const Score sign = perspective.same(color) ? 1 : -1;
+
+        // Pawns belonging to either teammate help shelter this king.
+        const auto ally = chess::Color(color).ally().id();
+        const auto team = pos.bitboard(color) | pos.bitboard(ally);
+        const auto shield = chess::get_crawl_attacks<chess::Piece::ID::King>(
+            pos.royal(color)) & pos.bitboard(chess::Piece::ID::Pawn) & team;
+        score += sign * 15 * shield.count();
+
+        if (pos.in_check(color)) score -= sign * CHECK_PRESSURE;
+    }
+
+    return score;
 }
 
 bool is_mate_score(Score score) noexcept {

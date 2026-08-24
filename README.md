@@ -88,6 +88,12 @@ Run the test suite with:
 ctest --test-dir build --output-on-failure
 ```
 
+Run the fixed-position search accuracy and performance benchmark with:
+
+```bash
+tools/bench.sh --check
+```
+
 Athena's move generator is highly optimized, achieving approximately 120 Mnps (million nodes per second) in benchmarks. You can verify this yourself:
 ```bash
 ./build/tests/perft_bench --benchmark_counters_tabular=true
@@ -147,11 +153,13 @@ Athena also provides additional commands for testing and debugging:
 - Alpha-Beta pruning
 - Principal-variation search with aspiration windows and iterative deepening
 - Move ordering using transposition moves, captures, promotions, checks, killer moves, and history scores
+- Non-mutating direct and discovered-check detection in move ordering
 - Quiescence search through captures, promotions, forcing checks, and check evasions, with delta pruning and a bounded quiet-check horizon
 - Bounded check extensions for tactical and coordinated mating lines
 - Complete principal-variation output instead of only the root move
 - Incrementally maintained Zobrist keys instead of recomputing the position hash at every node
-- Generation- and depth-aware transposition table with exact, lower, and upper bounds, including quiescence entries
+- Four-entry clustered, generation- and depth-aware transposition table with exact, lower, and upper bounds, including quiescence entries
+- Incrementally maintained material and piece-square evaluation totals
 - Threefold-repetition and 50-complete-move draw detection for four-player turn order
 - Fixed-depth, fixed-movetime, infinite, and interruptible searches
 - Parallel ranked root analysis with one to four worker threads

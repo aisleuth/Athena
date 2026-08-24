@@ -1,10 +1,13 @@
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
 #include <future>
 #include <string>
 #include <thread>
+#include <vector>
+#include "chess/attacks.h"
 #include "chess/constants.h"
 #include "chess/movegen.h"
 #include "chess/position.h"
@@ -62,6 +65,81 @@ void verify_hash_tree(chess::Position& position, int depth,
         position.undo_move(move);
         if (position.key() != original_key) ++stats.mismatches;
     }
+}
+
+struct FastPathStats {
+    std::uint64_t nodes = 0;
+    std::uint64_t moves = 0;
+    std::uint64_t attack_mismatches = 0;
+    std::uint64_t check_mismatches = 0;
+    std::uint64_t evaluation_mismatches = 0;
+    std::uint64_t castles = 0;
+    std::uint64_t en_passants = 0;
+    std::uint64_t promotions = 0;
+};
+
+void verify_fast_paths_tree(chess::Position& position, int depth,
+                            FastPathStats& stats) {
+    ++stats.nodes;
+    const auto full_evaluation = core::evaluate_material(position) +
+        core::evaluate_positional(position);
+    if (core::evaluate(position) != full_evaluation) {
+        ++stats.evaluation_mismatches;
+    }
+    for (int color_index = 0; color_index < chess::COLOR_NB; ++color_index) {
+        const auto color = static_cast<chess::Color::ID>(color_index);
+        const auto king = position.royal(color);
+        const auto expected = position.get_attackers_bitboard(
+            king, chess::Color(color), position.occupied()).any();
+        if (position.attacked(king, chess::Color(color),
+                              position.occupied()) != expected) {
+            ++stats.attack_mismatches;
+        }
+    }
+    if (depth == 0) return;
+
+    chess::Move moves[chess::MOVE_NB];
+    const int count = chess::generate_legal_moves(position, moves);
+    for (int index = 0; index < count; ++index) {
+        const auto move = moves[index];
+        const auto mover = position.turn();
+        const auto next = mover.next().id();
+        const auto previous = mover.prev().id();
+        const bool predicts_next = position.would_check(move, next);
+        const bool predicts_previous = position.would_check(move, previous);
+        ++stats.moves;
+        if (move.policy() == chess::Move::Policy::Castle) ++stats.castles;
+        if (move.policy() == chess::Move::Policy::Enpass) ++stats.en_passants;
+        if (move.policy() == chess::Move::Policy::Evolve) ++stats.promotions;
+
+        position.make_move(move);
+        const bool checks_next = position.get_attackers_bitboard(
+            position.royal(next), chess::Color(next), position.occupied()).any();
+        const bool checks_previous = position.get_attackers_bitboard(
+            position.royal(previous), chess::Color(previous),
+            position.occupied()).any();
+        if (predicts_next != checks_next) ++stats.check_mismatches;
+        if (predicts_previous != checks_previous) ++stats.check_mismatches;
+        verify_fast_paths_tree(position, depth - 1, stats);
+        position.undo_move(move);
+    }
+}
+
+chess::Position castling_test_position() {
+    chess::Position position;
+    position.set_setup(chess::Castle::Setup::Modern);
+    position.init(
+        "R-0,0,0,0-1,1,1,1-1,1,1,1-0,0,0,0-0-"
+        "x,x,x,yR,2,yK,3,yR,x,x,x/"
+        "x,x,x,yP,yP,yP,yP,yP,yP,yP,yP,x,x,x/"
+        "x,x,x,8,x,x,x/"
+        "bR,bP,10,gP,gR/1,bP,10,gP,1/1,bP,10,gP,1/"
+        "1,bP,10,gP,gK/bK,bP,10,gP,1/1,bP,10,gP,1/"
+        "1,bP,10,gP,1/bR,bP,10,gP,gR/"
+        "x,x,x,8,x,x,x/"
+        "x,x,x,rP,rP,rP,rP,rP,rP,rP,rP,x,x,x/"
+        "x,x,x,rR,3,rK,2,rR,x,x,x");
+    return position;
 }
 
 chess::Position coordinated_mate_position() {
@@ -176,6 +254,84 @@ TEST(EvaluateTest, RewardsCentralPieceActivity) {
     EXPECT_GT(core::evaluate_positional(position), baseline);
 }
 
+TEST(PositionTest, KingMayNotStepIntoAPawnAttack) {
+    // Regression: get_pawn_attacks used to swap the Blue and Yellow attack
+    // patterns, making checks by red and green pawns invisible. A green king
+    // on m8 could then step into l7, attacked by the red pawn on k6, and be
+    // captured on the next turn.
+    chess::Position position;
+    position.init(
+        "G-0,0,0,0-0,0,0,0-0,0,0,0-0,0,0,0-0-"
+        "x,x,x,8,x,x,x/"
+        "x,x,x,2,yK,5,x,x,x/"
+        "x,x,x,8,x,x,x/"
+        "14/14/14/"
+        "12,gK,1/"
+        "1,bK,12/"
+        "10,rP,3/"
+        "14/14/"
+        "x,x,x,8,x,x,x/"
+        "x,x,x,8,x,x,x/"
+        "x,x,x,2,rK,5,x,x,x");
+
+    EXPECT_TRUE(position.attacked(chess::Square("l7"),
+        chess::Color(chess::Color::ID::Green), position.occupied()));
+    EXPECT_TRUE(position.attacked(chess::Square("j7"),
+        chess::Color(chess::Color::ID::Green), position.occupied()));
+
+    chess::Move moves[chess::MOVE_NB];
+    const int move_count = chess::generate_legal_moves(position, moves);
+    ASSERT_GT(move_count, 0);
+    for (int index = 0; index < move_count; ++index) {
+        EXPECT_NE(moves[index].uci(), "m8l7")
+            << "green king stepped into the red pawn's attack";
+    }
+}
+
+TEST(PositionTest, PawnAttackTablesFollowEveryColorDirection) {
+    const chess::Square source("h8");
+    for (int color_index = 0; color_index < chess::COLOR_NB; ++color_index) {
+        const auto color = static_cast<chess::Color::ID>(color_index);
+        const auto attacks = chess::get_pawn_attacks(source, color);
+        EXPECT_TRUE(attacks.has_bit(source + chess::Square::take(color, 0)))
+            << color_index;
+        EXPECT_TRUE(attacks.has_bit(source + chess::Square::take(color, 1)))
+            << color_index;
+        EXPECT_EQ(attacks.count(), 2) << color_index;
+    }
+}
+
+TEST(PositionTest, NoisyGeneratorMatchesFilteredLegalMoves) {
+    auto position = modern_start_position();
+    for (const char* move : {"h2h3", "b7c7", "e13e11", "m5l5",
+                             "i1g3", "b9c9"}) {
+        play_uci(position, move);
+    }
+    ASSERT_FALSE(position.in_check());
+
+    chess::Move legal_moves[chess::MOVE_NB];
+    const int legal_count = chess::generate_legal_moves(position, legal_moves);
+    std::vector<std::uint32_t> expected;
+    for (int index = 0; index < legal_count; ++index) {
+        const auto move = legal_moves[index];
+        if (position.board(move.target()) != chess::PieceColor::empty() ||
+            move.policy() == chess::Move::Policy::Enpass ||
+            move.policy() == chess::Move::Policy::Evolve) {
+            expected.push_back(move.value());
+        }
+    }
+
+    chess::Move noisy_moves[chess::MOVE_NB];
+    const int noisy_count = chess::generate_noisy_moves(position, noisy_moves);
+    std::vector<std::uint32_t> actual;
+    for (int index = 0; index < noisy_count; ++index) {
+        actual.push_back(noisy_moves[index].value());
+    }
+    std::sort(expected.begin(), expected.end());
+    std::sort(actual.begin(), actual.end());
+    EXPECT_EQ(actual, expected);
+}
+
 TEST(PositionTest, EveryStartingMoveCanBeUndoneExactly) {
     auto position = modern_start_position();
     const auto original_fen = position.fen();
@@ -278,24 +434,43 @@ TEST(PositionTest, IncrementalHashMatchesExhaustiveMoveTrees) {
     EXPECT_EQ(starting_stats.mismatches, 0U);
     EXPECT_EQ(starting_stats.en_passants, 1'580U);
 
-    chess::Position castling_position;
-    castling_position.set_setup(chess::Castle::Setup::Modern);
-    castling_position.init(
-        "R-0,0,0,0-1,1,1,1-1,1,1,1-0,0,0,0-0-"
-        "x,x,x,yR,2,yK,3,yR,x,x,x/"
-        "x,x,x,yP,yP,yP,yP,yP,yP,yP,yP,x,x,x/"
-        "x,x,x,8,x,x,x/"
-        "bR,bP,10,gP,gR/1,bP,10,gP,1/1,bP,10,gP,1/"
-        "1,bP,10,gP,gK/bK,bP,10,gP,1/1,bP,10,gP,1/"
-        "1,bP,10,gP,1/bR,bP,10,gP,gR/"
-        "x,x,x,8,x,x,x/"
-        "x,x,x,rP,rP,rP,rP,rP,rP,rP,rP,x,x,x/"
-        "x,x,x,rR,3,rK,2,rR,x,x,x");
+    auto castling_position = castling_test_position();
     HashWalkStats castling_stats;
     verify_hash_tree(castling_position, 4, castling_stats);
     EXPECT_EQ(castling_stats.nodes, 343'252U);
     EXPECT_EQ(castling_stats.mismatches, 0U);
     EXPECT_EQ(castling_stats.castles, 1'150U);
+}
+
+TEST(PositionTest, FastAttackCheckAndEvaluationPathsMatchReferences) {
+    FastPathStats stats;
+    auto starting_position = modern_start_position();
+    verify_fast_paths_tree(starting_position, 4, stats);
+
+    auto castling_position = castling_test_position();
+    verify_fast_paths_tree(castling_position, 1, stats);
+
+    auto promotion_position = modern_start_position();
+    for (int square = 0; square < chess::SQUARE_NB; ++square) {
+        const auto id = static_cast<chess::Square::ID>(square);
+        const auto piece = promotion_position.board(id);
+        if (piece == chess::PieceColor(chess::Color::ID::Red,
+                                      chess::Piece::ID::Pawn)) {
+            promotion_position.pop_board(chess::Square(id), piece);
+            promotion_position.set_board(chess::Square("e11"), piece);
+            break;
+        }
+    }
+    promotion_position.init(promotion_position.fen());
+    verify_fast_paths_tree(promotion_position, 1, stats);
+
+    EXPECT_GT(stats.nodes, 150'000U);
+    EXPECT_GT(stats.moves, 150'000U);
+    EXPECT_GT(stats.castles, 0U);
+    EXPECT_GT(stats.promotions, 0U);
+    EXPECT_EQ(stats.attack_mismatches, 0U);
+    EXPECT_EQ(stats.check_mismatches, 0U);
+    EXPECT_EQ(stats.evaluation_mismatches, 0U);
 }
 
 TEST(TranspositionTableTest, MainEntriesRespectCheckExtensionBudgetInQuiescence) {
@@ -326,6 +501,28 @@ TEST(TranspositionTableTest, SameCapacityResizePreservesEntries) {
     ASSERT_NE(entry, nullptr);
     EXPECT_EQ(entry->score, 42);
     EXPECT_EQ(entry->depth, 5);
+}
+
+TEST(TranspositionTableTest, ClusterRetainsFourCollidingEntries) {
+    core::TranspositionTable table(1);
+    constexpr chess::zobrist::Key base = 0x100;
+    for (std::uint64_t offset = 0; offset < 4; ++offset) {
+        table.store(base + offset, static_cast<int>(offset + 1), 0,
+                    static_cast<core::Score>(10 + offset),
+                    core::TranspositionTable::Bound::Exact, chess::Move{});
+    }
+    for (std::uint64_t offset = 0; offset < 4; ++offset) {
+        ASSERT_NE(table.probe(base + offset), nullptr) << offset;
+    }
+
+    const auto replacement_key = base + table.size();
+    table.store(replacement_key, 10, 0, 99,
+                core::TranspositionTable::Bound::Exact, chess::Move{});
+    EXPECT_EQ(table.probe(base), nullptr);
+    EXPECT_NE(table.probe(replacement_key), nullptr);
+    for (std::uint64_t offset = 1; offset < 4; ++offset) {
+        EXPECT_NE(table.probe(base + offset), nullptr) << offset;
+    }
 }
 
 TEST(PositionTest, DetectsCheckForAPlayerWhoIsNotOnMove) {
@@ -381,9 +578,23 @@ TEST(PositionTest, EnPassantOnlyUsesTheApproachBesideTheStridingPawn) {
         if (moves[i].policy() != chess::Move::Policy::Enpass) continue;
         ++en_passant_count;
         EXPECT_EQ(moves[i].uci(), "k3l4");
+        const auto mover = position.turn();
+        const auto next = mover.next().id();
+        const auto previous = mover.prev().id();
+        const bool predicts_next = position.would_check(moves[i], next);
+        const bool predicts_previous = position.would_check(moves[i], previous);
         position.make_move(moves[i]);
         EXPECT_TRUE(position.consistent());
         EXPECT_EQ(position.key(), chess::zobrist::recompute(position));
+        EXPECT_EQ(predicts_next, position.get_attackers_bitboard(
+            position.royal(next), chess::Color(next),
+            position.occupied()).any());
+        EXPECT_EQ(predicts_previous, position.get_attackers_bitboard(
+            position.royal(previous), chess::Color(previous),
+            position.occupied()).any());
+        EXPECT_EQ(core::evaluate(position),
+            core::evaluate_material(position) +
+            core::evaluate_positional(position));
         position.undo_move(moves[i]);
         EXPECT_TRUE(position.consistent());
         EXPECT_EQ(position.fen(), original_fen);

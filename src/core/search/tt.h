@@ -37,6 +37,8 @@ public:
         }
     };
 
+    static constexpr std::size_t BUCKET_SIZE = 4;
+
     explicit TranspositionTable(std::size_t megabytes = 16);
 
     void resize(std::size_t megabytes);

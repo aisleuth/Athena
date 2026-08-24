@@ -6,6 +6,7 @@
 #include "bitboard.h"
 #include "square.h"
 #include "castle.h"
+#include "psqt.h"
 #include "zobrist.h"
 #include <cstdint>
 
@@ -41,6 +42,7 @@ public:
     auto royal( Color::ID color) const noexcept { return  royal_[static_cast<uint8_t>(color)]; }
 
     auto turn() const noexcept { return turn_; }
+    auto psq(Color::ID color) const noexcept { return psq_[static_cast<uint8_t>(color)]; }
     auto play() const noexcept { return play_; }
     auto key() const noexcept { return key_; }
 
@@ -67,8 +69,22 @@ public:
     bool legal(Move* move) const noexcept;
     Bitboard get_attackers_bitboard(Square sq, Color color, const Bitboard& occupancy) const noexcept;
 
+    // Early-exit variant of get_attackers_bitboard: answers "is sq attacked by
+    // an opponent of color?" without materializing the full attacker set, and
+    // skips the sliding scans when no enemy slider is aligned with sq on an
+    // empty board. `exclude` masks attackers off (used by would_check to
+    // ignore the moving piece, which the bitboards still hold at its source).
+    bool attacked(Square sq, Color color, const Bitboard& occupancy,
+                  const Bitboard& exclude = Bitboard{}) const noexcept;
+
+    // Exact equivalent of { make_move(move); in_check(king_color);
+    // undo_move(move); } for a pseudo-legal move by the side to move and an
+    // opposing king, without touching the position. Includes checks the move
+    // leaves standing, discovered checks, promotions, en passant, castling.
+    bool would_check(Move move, Color::ID king_color) const noexcept;
+
     bool in_check(Color::ID color) const noexcept {
-        return get_attackers_bitboard(royal(color), Color(color), occupied()).any();
+        return attacked(royal(color), Color(color), occupied());
     }
 
     bool in_check() const noexcept { return in_check(turn_.id()); }
@@ -101,6 +117,7 @@ private:
     std::array<Square, COLOR_NB> enpass_;
     std::array<Square, COLOR_NB> royal_;
     std::array<zobrist::Key, PLAY_NB> key_history_{};
+    std::array<psqt::Value, COLOR_NB + 1> psq_{}; // +1: None slot absorbs stray writes
     zobrist::Key key_{0};
     Depth play_{0};
     Color turn_{Color::ID::Red};
@@ -127,6 +144,7 @@ private:
     }
 
     void clear_board() noexcept {
+        psq_.fill(0);
         enpass_.fill(Square::offboard());
         royal_.fill(Square::offboard());
         piece_.fill(Bitboard(0ULL));

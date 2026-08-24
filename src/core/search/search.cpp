@@ -55,14 +55,15 @@ Score tactical_gain(const chess::Position& position,
     return gain;
 }
 
-std::uint8_t check_targets_after_move(chess::Position& position,
+std::uint8_t check_targets_after_move(const chess::Position& position,
                                       chess::Move move) noexcept {
-    const auto mover = position.turn();
-    position.make_move(move);
     std::uint8_t targets = NoCheck;
-    if (position.in_check()) targets |= ImmediateOpponent;
-    if (position.in_check(mover.prev().id())) targets |= OtherOpponent;
-    position.undo_move(move);
+    if (position.would_check(move, position.turn().next().id())) {
+        targets |= ImmediateOpponent;
+    }
+    if (position.would_check(move, position.turn().prev().id())) {
+        targets |= OtherOpponent;
+    }
     return targets;
 }
 
@@ -743,19 +744,28 @@ Score Search::quiescence(chess::Position& position, Score alpha, Score beta,
             return stand_pat;
         }
         alpha = std::max(alpha, stand_pat);
-        move_count = chess::generate_legal_moves(position, moves);
-        int forcing_count = 0;
-        for (int i = 0; i < move_count; ++i) {
-            const auto move = moves[i];
-            bool include = is_noisy(position, move);
-            if (!include && quiescence_ply < MAX_QUIESCENCE_CHECK_PLY) {
-                const auto checks = check_targets_after_move(position, move);
-                include = (checks & ImmediateOpponent) != 0;
-                if (include) ++quiescence_checks_;
+        if (quiescence_ply < MAX_QUIESCENCE_CHECK_PLY) {
+            // Quiet checks are still candidates: generate everything and
+            // keep captures, promotions, and checking quiet moves.
+            move_count = chess::generate_legal_moves(position, moves);
+            int forcing_count = 0;
+            for (int i = 0; i < move_count; ++i) {
+                const auto move = moves[i];
+                bool include = is_noisy(position, move);
+                if (!include) {
+                    include = position.would_check(
+                        move, position.turn().next().id());
+                    if (include) ++quiescence_checks_;
+                }
+                if (include) moves[forcing_count++] = move;
             }
-            if (include) moves[forcing_count++] = move;
+            move_count = forcing_count;
+        } else {
+            // Beyond the quiet-check horizon only noisy moves are searched;
+            // generating them directly skips every quiet move's generation
+            // and legality test.
+            move_count = chess::generate_noisy_moves(position, moves);
         }
-        move_count = forcing_count;
         if (move_count == 0) return stand_pat;
     }
 
@@ -767,13 +777,12 @@ Score Search::quiescence(chess::Position& position, Score alpha, Score beta,
         const bool delta_candidate = !in_check &&
             move.policy() != chess::Move::Policy::Evolve &&
             stand_pat + tactical_gain(position, move) + DELTA_MARGIN < alpha;
-        const auto mover = position.turn();
-        position.make_move(move);
-        if (delta_candidate && !position.in_check() &&
-            !position.in_check(mover.prev().id())) {
-            position.undo_move(move);
+        if (delta_candidate &&
+            !position.would_check(move, position.turn().next().id()) &&
+            !position.would_check(move, position.turn().prev().id())) {
             continue;
         }
+        position.make_move(move);
         const Score score = -quiescence(position, -beta, -alpha, ply + 1,
                                         quiescence_ply + 1, extensions_used);
         position.undo_move(move);

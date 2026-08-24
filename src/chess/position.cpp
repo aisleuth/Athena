@@ -27,6 +27,8 @@ void Position::set_board(Square sq, PieceColor pc) noexcept {
     piece_[static_cast<uint8_t>(pc.piece().id())].set_bit(sq);
     color_[static_cast<uint8_t>(pc.color().id())].set_bit(sq);
     key_ ^= zobrist::piece_square(pc, sq);
+    psq_[static_cast<uint8_t>(pc.color().id())] +=
+        psqt::value(pc.piece().id(), pc.color().id(), sq);
 }
 
 void Position::pop_board(Square sq, PieceColor pc) noexcept {
@@ -34,6 +36,8 @@ void Position::pop_board(Square sq, PieceColor pc) noexcept {
     piece_[static_cast<uint8_t>(pc.piece().id())].pop_bit(sq);
     color_[static_cast<uint8_t>(pc.color().id())].pop_bit(sq);
     key_ ^= zobrist::piece_square(pc, sq);
+    psq_[static_cast<uint8_t>(pc.color().id())] -=
+        psqt::value(pc.piece().id(), pc.color().id(), sq);
 }
 
 void Position::make_move(Move move) noexcept {
@@ -212,6 +216,115 @@ void Position::undo_move(Move move) noexcept {
     }
 
     key_ = key_history_[play_];
+}
+
+bool Position::attacked(Square sq, Color color, const Bitboard& occupied,
+                        const Bitboard& exclude) const noexcept {
+    const auto enemy = (bitboard(color.next().id()) |
+                        bitboard(color.prev().id())) & ~exclude;
+
+    if ((get_crawl_attacks<Piece::ID::Knight>(sq) &
+         bitboard(Piece::ID::Knight) & enemy).any()) return true;
+    if ((get_pawn_attacks(sq, color.next().id()) & bitboard(Piece::ID::Pawn) &
+         bitboard(color.prev().id()) & ~exclude).any()) return true;
+    if ((get_pawn_attacks(sq, color.prev().id()) & bitboard(Piece::ID::Pawn) &
+         bitboard(color.next().id()) & ~exclude).any()) return true;
+    if ((get_crawl_attacks<Piece::ID::King>(sq) &
+         bitboard(Piece::ID::King) & enemy).any()) return true;
+
+    // Sliding scans are the expensive part; only run them when an enemy
+    // slider sits on one of sq's lines of an empty board.
+    const auto diagonal = get_slide_attacks<Piece::ID::Bishop>(sq) &
+        (bitboard(Piece::ID::Bishop) | bitboard(Piece::ID::Queen)) & enemy;
+    if (diagonal.any() &&
+        (get_slide_attacks<Piece::ID::Bishop>(sq, occupied) & diagonal).any()) {
+        return true;
+    }
+    const auto straight = get_slide_attacks<Piece::ID::Rook>(sq) &
+        (bitboard(Piece::ID::Rook) | bitboard(Piece::ID::Queen)) & enemy;
+    return straight.any() &&
+        (get_slide_attacks<Piece::ID::Rook>(sq, occupied) & straight).any();
+}
+
+bool Position::would_check(Move move, Color::ID king_color) const noexcept {
+    const auto king = royal(king_color);
+    const auto source = Square(move.source());
+    const auto target = Square(move.target());
+    const auto policy = move.policy();
+
+    auto occ = occupied();
+    occ.pop_bit(source);
+    occ.set_bit(target);
+    if (policy == Move::Policy::Enpass ||
+        (policy == Move::Policy::Evolve && move.enpass() != Color::ID::None)) {
+        occ.pop_bit(source + Square::push(turn_.id(), 0));
+    }
+
+    Square rook_source = Square::offboard();
+    if (policy == Move::Policy::Castle) {
+        rook_source = Castle::rook_source(setup_, turn_.id(), move.castle());
+        const auto rook_target =
+            Castle::rook_target(setup_, turn_.id(), move.castle());
+        occ.pop_bit(rook_source);
+        occ.set_bit(rook_target);
+        if (get_slide_attacks<Piece::ID::Rook>(rook_target).has_bit(king) &&
+            get_slide_attacks<Piece::ID::Rook>(rook_target, occ).has_bit(king)) {
+            return true;
+        }
+    }
+
+    // Direct check by the moved piece from its target square. The piece
+    // bitboards still hold it at source, so this is tested explicitly.
+    const auto piece = policy == Move::Policy::Evolve
+        ? move.evolve()
+        : board(move.source()).piece().id();
+    switch (piece) {
+        case Piece::ID::Queen:
+            if ((get_slide_attacks<Piece::ID::Bishop>(target).has_bit(king) &&
+                 get_slide_attacks<Piece::ID::Bishop>(target, occ).has_bit(king)) ||
+                (get_slide_attacks<Piece::ID::Rook>(target).has_bit(king) &&
+                 get_slide_attacks<Piece::ID::Rook>(target, occ).has_bit(king))) {
+                return true;
+            }
+            break;
+        case Piece::ID::Bishop:
+            if (get_slide_attacks<Piece::ID::Bishop>(target).has_bit(king) &&
+                get_slide_attacks<Piece::ID::Bishop>(target, occ).has_bit(king)) {
+                return true;
+            }
+            break;
+        case Piece::ID::Rook:
+            if (get_slide_attacks<Piece::ID::Rook>(target).has_bit(king) &&
+                get_slide_attacks<Piece::ID::Rook>(target, occ).has_bit(king)) {
+                return true;
+            }
+            break;
+        case Piece::ID::Knight:
+            if (get_crawl_attacks<Piece::ID::Knight>(target).has_bit(king)) {
+                return true;
+            }
+            break;
+        case Piece::ID::King:
+            if (get_crawl_attacks<Piece::ID::King>(target).has_bit(king)) {
+                return true;
+            }
+            break;
+        case Piece::ID::Pawn:
+            // A pawn of color c attacks king iff its square lies in the
+            // king-relative table for c.ally() (see get_attackers_bitboard).
+            if (get_pawn_attacks(king, turn_.ally().id()).has_bit(target)) {
+                return true;
+            }
+            break;
+        default: break;
+    }
+
+    // Discovered checks and checks the move leaves standing. Exclude the
+    // mover (and castling rook), which the bitboards still hold at source.
+    Bitboard exclude{};
+    exclude.set_bit(source);
+    if (policy == Move::Policy::Castle) exclude.set_bit(rook_source);
+    return attacked(king, Color(king_color), occ, exclude);
 }
 
 bool Position::is_repetition(int required_occurrences) const noexcept {
