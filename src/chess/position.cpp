@@ -17,6 +17,7 @@
 #include "square.h"
 #include "position.h"
 #include "attacks.h"
+#include "zobrist.h"
 
 namespace athena::chess {
 
@@ -24,15 +25,19 @@ void Position::set_board(Square sq, PieceColor pc) noexcept {
     board_[static_cast<uint8_t>(sq.id())] = pc;
     piece_[static_cast<uint8_t>(pc.piece().id())].set_bit(sq);
     color_[static_cast<uint8_t>(pc.color().id())].set_bit(sq);
+    key_ ^= zobrist::piece_square(pc, sq);
 }
 
 void Position::pop_board(Square sq, PieceColor pc) noexcept {
     board_[static_cast<uint8_t>(sq.id())] = PieceColor::empty();
     piece_[static_cast<uint8_t>(pc.piece().id())].pop_bit(sq);
     color_[static_cast<uint8_t>(pc.color().id())].pop_bit(sq);
+    key_ ^= zobrist::piece_square(pc, sq);
 }
 
 void Position::make_move(Move move) noexcept {
+
+    key_history_[play_] = key_;
 
     auto& curr_state = state_[play_ + 0];
     auto& next_state = state_[play_ + 1];
@@ -43,6 +48,13 @@ void Position::make_move(Move move) noexcept {
 
     const auto attacker = board(source);
     const auto defender = board(target);
+
+    key_ ^= zobrist::turn(turn_.id());
+    key_ ^= zobrist::castle(curr_state.castle);
+    const auto previous_enpassant = enpass(turn_.id());
+    if (previous_enpassant != Square::offboard()) {
+        key_ ^= zobrist::enpassant(turn_.id(), previous_enpassant);
+    }
 
     next_state.capture = defender;
     next_state.castle = curr_state.castle;
@@ -128,6 +140,14 @@ void Position::make_move(Move move) noexcept {
     play_++;
     turn_ = turn_.next();
     set_occupany_bitboards();
+
+    key_ ^= zobrist::turn(turn_.id());
+    key_ ^= zobrist::castle(state().castle);
+    const auto current_enpassant = enpass(turn_.prev().id());
+    if (current_enpassant != Square::offboard()) {
+        key_ ^= zobrist::enpassant(turn_.prev().id(), current_enpassant);
+    }
+    key_history_[play_] = key_;
 }
 
 void Position::undo_move(Move move) noexcept {
@@ -189,6 +209,28 @@ void Position::undo_move(Move move) noexcept {
 
         default: break;
     }
+
+    key_ = key_history_[play_];
+}
+
+bool Position::is_repetition(int required_occurrences) const noexcept {
+    if (required_occurrences <= 1) return true;
+    if (play_ < static_cast<Depth>((required_occurrences - 1) * COLOR_NB) ||
+        state().fifty_move_clock <
+            static_cast<Clock>((required_occurrences - 1) * COLOR_NB)) {
+        return false;
+    }
+    int occurrences = 1;
+    const int reversible_plies = std::min(
+        static_cast<int>(play_), static_cast<int>(state().fifty_move_clock));
+    for (int distance = COLOR_NB; distance <= reversible_plies;
+         distance += COLOR_NB) {
+        if (key_history_[static_cast<std::size_t>(play_ - distance)] == key_ &&
+            ++occurrences >= required_occurrences) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void Position::undo_move(const std::string& move, bool board16x16) noexcept {}
@@ -516,6 +558,8 @@ void Position::init(const FEN& fen) noexcept {
 
     set_occupany_bitboards();
     set_pinned_checks_bitboards();
+    key_ = zobrist::recompute(*this);
+    key_history_[play_] = key_;
 }
 
 Position::FEN Position::fen() const noexcept {

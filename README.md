@@ -32,7 +32,7 @@ rankings, progress, and best-move arrows.
 ## Getting Started
 To build Athena from source, run the following commands:
 ```bash
-git clone https://github.com/arianahejazyan/Athena.git
+git clone https://github.com/aisleuth/Athena.git
 cd Athena
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
@@ -144,12 +144,14 @@ Athena also provides additional commands for testing and debugging:
 ### Search
 - Negamax
 - Alpha-Beta pruning
-- Iterative deepening
-- Move ordering for captures, promotions, and checks against either opponent
-- Quiescence search through captures, promotions, forcing checks, and check evasions
+- Principal-variation search with aspiration windows and iterative deepening
+- Move ordering using transposition moves, captures, promotions, checks, killer moves, and history scores
+- Quiescence search through captures, promotions, forcing checks, and check evasions, with delta pruning and a bounded quiet-check horizon
 - Bounded check extensions for tactical and coordinated mating lines
 - Complete principal-variation output instead of only the root move
-- Zobrist-keyed transposition table with exact, lower, and upper bounds
+- Incrementally maintained Zobrist keys instead of recomputing the position hash at every node
+- Generation- and depth-aware transposition table with exact, lower, and upper bounds, including quiescence entries
+- Threefold-repetition and 50-complete-move draw detection for four-player turn order
 - Fixed-depth, fixed-movetime, infinite, and interruptible searches
 - Parallel ranked root analysis with one to four worker threads
 ### Evaluate

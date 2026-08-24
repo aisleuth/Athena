@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
+#include <array>
 #include <chrono>
 #include <future>
+#include <string>
 #include <thread>
 #include "chess/constants.h"
 #include "chess/movegen.h"
@@ -18,6 +20,18 @@ chess::Position modern_start_position() {
     position.set_setup(chess::Castle::Setup::Modern);
     position.init(chess::Position::startpos(chess::Castle::Setup::Modern));
     return position;
+}
+
+void play_uci(chess::Position& position, const std::string& uci) {
+    chess::Move moves[chess::MOVE_NB];
+    const int count = chess::generate_legal_moves(position, moves);
+    for (int index = 0; index < count; ++index) {
+        if (moves[index].uci() == uci) {
+            position.make_move(moves[index]);
+            return;
+        }
+    }
+    FAIL() << "Illegal test move: " << uci;
 }
 
 chess::Position coordinated_mate_position() {
@@ -141,8 +155,12 @@ TEST(PositionTest, EveryStartingMoveCanBeUndoneExactly) {
 
     for (int i = 0; i < count; ++i) {
         position.make_move(moves[i]);
+        EXPECT_EQ(position.key(), chess::zobrist::recompute(position))
+            << moves[i].uci();
         position.undo_move(moves[i]);
         EXPECT_EQ(position.fen(), original_fen) << moves[i].uci();
+        EXPECT_EQ(position.key(), chess::zobrist::recompute(position))
+            << moves[i].uci();
     }
 }
 
@@ -170,8 +188,10 @@ TEST(PositionTest, PromotionCanBeUndoneExactly) {
     for (int i = 0; i < count; ++i) {
         if (moves[i].uci() == "e11e12Q") {
             position.make_move(moves[i]);
+            EXPECT_EQ(position.key(), chess::zobrist::recompute(position));
             position.undo_move(moves[i]);
             EXPECT_EQ(position.fen(), original_fen);
+            EXPECT_EQ(position.key(), chess::zobrist::recompute(position));
             tested = true;
             break;
         }
@@ -188,8 +208,36 @@ TEST(PositionTest, ZobristHashTracksMovesAndUndo) {
 
     position.make_move(moves[0]);
     EXPECT_NE(chess::zobrist::hash(position), original_hash);
+    EXPECT_EQ(chess::zobrist::hash(position),
+              chess::zobrist::recompute(position));
     position.undo_move(moves[0]);
     EXPECT_EQ(chess::zobrist::hash(position), original_hash);
+    EXPECT_EQ(chess::zobrist::hash(position),
+              chess::zobrist::recompute(position));
+}
+
+TEST(PositionTest, DetectsThreefoldRepetitionAcrossFourPlayerRounds) {
+    auto position = modern_start_position();
+    const std::array<std::string, 8> cycle = {
+        "e1d3", "a5c4", "e14d12", "n5l4",
+        "d3e1", "c4a5", "d12e14", "l4n5",
+    };
+
+    for (const auto& move : cycle) play_uci(position, move);
+    EXPECT_FALSE(position.is_repetition());
+    for (const auto& move : cycle) play_uci(position, move);
+    EXPECT_TRUE(position.is_repetition());
+    EXPECT_EQ(position.key(), chess::zobrist::recompute(position));
+}
+
+TEST(PositionTest, FourPlayerFiftyMoveClockUsesCompleteRounds) {
+    auto position = modern_start_position();
+    position.state().fifty_move_clock = 199;
+    EXPECT_FALSE(position.is_fifty_move_draw());
+    position.state().fifty_move_clock = 200;
+    EXPECT_TRUE(position.is_fifty_move_draw());
+    position.state().fifty_move_clock = 300;
+    EXPECT_TRUE(position.is_fifty_move_draw());
 }
 
 TEST(PositionTest, DetectsCheckForAPlayerWhoIsNotOnMove) {
@@ -247,9 +295,11 @@ TEST(PositionTest, EnPassantOnlyUsesTheApproachBesideTheStridingPawn) {
         EXPECT_EQ(moves[i].uci(), "k3l4");
         position.make_move(moves[i]);
         EXPECT_TRUE(position.consistent());
+        EXPECT_EQ(position.key(), chess::zobrist::recompute(position));
         position.undo_move(moves[i]);
         EXPECT_TRUE(position.consistent());
         EXPECT_EQ(position.fen(), original_fen);
+        EXPECT_EQ(position.key(), chess::zobrist::recompute(position));
     }
     EXPECT_EQ(en_passant_count, 1);
 }
@@ -493,6 +543,47 @@ TEST(SearchTest, StartingPositionDoesNotProduceAFalseMateAtDepthSix) {
         ASSERT_TRUE(found) << move.uci();
         position.make_move(move);
     }
+}
+
+TEST(SearchTest, ScoresThreefoldRepetitionAsADraw) {
+    auto position = modern_start_position();
+    const std::array<std::string, 8> cycle = {
+        "e1d3", "a5c4", "e14d12", "n5l4",
+        "d3e1", "c4a5", "d12e14", "l4n5",
+    };
+    for (int repetition = 0; repetition < 2; ++repetition) {
+        for (const auto& move : cycle) play_uci(position, move);
+    }
+    ASSERT_TRUE(position.is_repetition());
+
+    core::Search search;
+    core::Search::Limits limits;
+    limits.depth = 2;
+    const auto result = search.think(position, limits);
+
+    EXPECT_EQ(result.score, core::SCORE_DRAW);
+}
+
+TEST(SearchTest, ScoresFiftyMovePositionAsADraw) {
+    auto position = modern_start_position();
+    const auto blue_queen = chess::PieceColor(
+        chess::Color::ID::Blue, chess::Piece::ID::Queen);
+    for (int square = 0; square < chess::SQUARE_NB; ++square) {
+        const auto id = static_cast<chess::Square::ID>(square);
+        if (position.board(id) == blue_queen) {
+            position.pop_board(chess::Square(id), blue_queen);
+            break;
+        }
+    }
+    ASSERT_GT(core::evaluate(position), core::SCORE_DRAW);
+    position.state().fifty_move_clock = 200;
+
+    core::Search search;
+    core::Search::Limits limits;
+    limits.depth = 2;
+    const auto result = search.think(position, limits);
+
+    EXPECT_EQ(result.score, core::SCORE_DRAW);
 }
 
 TEST(SearchTest, ReusesTranspositionTableResults) {

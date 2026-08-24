@@ -103,6 +103,9 @@ private:
     static constexpr int MAX_PV_PLY = 96;
     std::array<std::array<chess::Move, MAX_PV_PLY>, MAX_PV_PLY> pv_table_{};
     std::array<int, MAX_PV_PLY> pv_length_{};
+    std::array<std::array<chess::Move, 2>, MAX_PV_PLY> killers_{};
+    std::array<std::array<std::int32_t,
+        chess::SQUARE_NB * chess::SQUARE_NB>, chess::COLOR_NB> history_{};
     TranspositionTable table_;
     std::size_t hash_megabytes_{16};
     int threads_{1};

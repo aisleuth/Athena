@@ -6,6 +6,7 @@
 #include "bitboard.h"
 #include "square.h"
 #include "castle.h"
+#include "zobrist.h"
 #include <cstdint>
 
 namespace athena::chess {
@@ -13,7 +14,7 @@ namespace athena::chess {
 class alignas(64) Position {
 public:
     using FEN   = std::string;
-    using Clock = uint8_t;
+    using Clock = uint16_t;
     using Depth = uint16_t;
 
     struct alignas(4) State // copy assignment optimized
@@ -41,6 +42,13 @@ public:
 
     auto turn() const noexcept { return turn_; }
     auto play() const noexcept { return play_; }
+    auto key() const noexcept { return key_; }
+
+    bool is_repetition(int required_occurrences = 3) const noexcept;
+    bool is_fifty_move_draw() const noexcept {
+        // In 4PC one complete move consists of all four players taking a turn.
+        return state().fifty_move_clock >= 4 * 50;
+    }
 
     void set_board(Square sq, PieceColor pc) noexcept;
     void pop_board(Square sq, PieceColor pc) noexcept;
@@ -93,9 +101,11 @@ private:
     alignas(64) std::array<std::array<Bitboard, 3>, PLAY_NB> occupancy_;
     std::array<Square, COLOR_NB> enpass_;
     std::array<Square, COLOR_NB> royal_;
-    Depth play_;
-    Color turn_;
-    Castle::Setup setup_;
+    std::array<zobrist::Key, PLAY_NB> key_history_{};
+    zobrist::Key key_{0};
+    Depth play_{0};
+    Color turn_{Color::ID::Red};
+    Castle::Setup setup_{Castle::Setup::Modern};
 
     void set_enpass(Square sq, Color::ID color) noexcept { enpass_[static_cast<uint8_t>(color)] = sq; }
     void set_royal( Square sq, Color::ID color) noexcept {  royal_[static_cast<uint8_t>(color)] = sq; }
@@ -113,6 +123,8 @@ private:
         state.enpass  = Square::offboard();
         state.castle  = 0;
         state.fifty_move_clock = 0;
+        key_ = 0;
+        key_history_.fill(0);
     }
 
     void clear_board() noexcept {

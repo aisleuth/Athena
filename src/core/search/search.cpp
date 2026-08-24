@@ -20,7 +20,8 @@ constexpr std::array<int, chess::PIECE_NB> ORDER_VALUE = {
 
 constexpr int MAX_CHECK_EXTENSIONS = 4;
 constexpr int MAX_QUIESCENCE_PLY = 16;
-constexpr int MAX_QUIESCENCE_CHECK_PLY = 6;
+constexpr int MAX_QUIESCENCE_CHECK_PLY = 2;
+constexpr Score DELTA_MARGIN = 150;
 
 enum CheckTarget : std::uint8_t {
     NoCheck = 0,
@@ -32,6 +33,25 @@ bool is_noisy(const chess::Position& position, chess::Move move) noexcept {
     return position.board(move.target()) != chess::PieceColor::empty() ||
         move.policy() == chess::Move::Policy::Enpass ||
         move.policy() == chess::Move::Policy::Evolve;
+}
+
+Score tactical_gain(const chess::Position& position,
+                    chess::Move move) noexcept {
+    Score gain = 0;
+    const auto captured = position.board(move.target());
+    if (captured != chess::PieceColor::empty()) {
+        gain += ORDER_VALUE[static_cast<std::size_t>(captured.piece().id())];
+    }
+    if (move.policy() == chess::Move::Policy::Enpass ||
+        (move.policy() == chess::Move::Policy::Evolve &&
+         move.enpass() != chess::Color::ID::None)) {
+        gain += ORDER_VALUE[static_cast<std::size_t>(chess::Piece::ID::Pawn)];
+    }
+    if (move.policy() == chess::Move::Policy::Evolve) {
+        gain += ORDER_VALUE[static_cast<std::size_t>(move.evolve())]
+            - ORDER_VALUE[static_cast<std::size_t>(chess::Piece::ID::Pawn)];
+    }
+    return gain;
 }
 
 std::uint8_t check_targets_after_move(chess::Position& position,
@@ -46,7 +66,9 @@ std::uint8_t check_targets_after_move(chess::Position& position,
 }
 
 int move_order_score(const chess::Position& position, chess::Move move,
-                     chess::Move table_move, std::uint8_t checks) noexcept {
+                     chess::Move table_move, std::uint8_t checks,
+                     const std::array<chess::Move, 2>* killers,
+                     const std::int32_t* history) noexcept {
     if (!table_move.is_null() && move == table_move) return 1'000'000;
     int score = 0;
     const auto captured = position.board(move.target());
@@ -62,11 +84,22 @@ int move_order_score(const chess::Position& position, chess::Move move,
     }
     if ((checks & ImmediateOpponent) != 0) score += 40'000;
     if ((checks & OtherOpponent) != 0) score += 30'000;
+    if (!is_noisy(position, move)) {
+        if (killers && move == (*killers)[0]) score += 15'000;
+        else if (killers && move == (*killers)[1]) score += 14'000;
+        if (history) {
+            const auto index = static_cast<std::size_t>(move.source()) *
+                chess::SQUARE_NB + static_cast<std::size_t>(move.target());
+            score += std::min<std::int32_t>(10'000, history[index]);
+        }
+    }
     return score;
 }
 
 void order_moves(chess::Position& position, chess::Move* moves, int move_count,
-                 chess::Move table_move) {
+                 chess::Move table_move, bool detect_checks = true,
+                 const std::array<chess::Move, 2>* killers = nullptr,
+                 const std::int32_t* history = nullptr) {
     struct ScoredMove {
         chess::Move move;
         int score;
@@ -74,9 +107,12 @@ void order_moves(chess::Position& position, chess::Move* moves, int move_count,
 
     std::array<ScoredMove, chess::MOVE_NB> scored{};
     for (int i = 0; i < move_count; ++i) {
-        const auto checks = check_targets_after_move(position, moves[i]);
+        const std::uint8_t checks = detect_checks
+            ? check_targets_after_move(position, moves[i])
+            : static_cast<std::uint8_t>(NoCheck);
         scored[static_cast<std::size_t>(i)] = {
-            moves[i], move_order_score(position, moves[i], table_move, checks)};
+            moves[i], move_order_score(position, moves[i], table_move, checks,
+                                       killers, history)};
     }
 
     std::stable_sort(scored.begin(), scored.begin() + move_count,
@@ -131,6 +167,9 @@ void Search::prepare_worker(
     has_deadline_ = limits.move_time.count() > 0 && !limits.infinite;
     if (has_deadline_) deadline_ = started + limits.move_time;
     heartbeat_ = {};
+    table_.new_search();
+    killers_ = {};
+    history_ = {};
 }
 
 bool Search::should_stop() noexcept {
@@ -154,6 +193,9 @@ Search::Result Search::think(const chess::Position& position, const Limits& limi
     Result result;
     chess::Position current = position;
     const auto started = std::chrono::steady_clock::now();
+    table_.new_search();
+    killers_ = {};
+    history_ = {};
 
     nodes_ = 0;
     quiescence_nodes_ = 0;
@@ -174,8 +216,29 @@ Search::Result Search::think(const chess::Position& position, const Limits& limi
     for (int depth = 1; depth <= maximum_depth; ++depth) {
         chess::Move iteration_best;
         aborted_ = false;
-        const Score score = alpha_beta(current, depth, -SCORE_INFINITE,
-                                       SCORE_INFINITE, 0, 0, &iteration_best);
+        Score alpha = -SCORE_INFINITE;
+        Score beta = SCORE_INFINITE;
+        Score window = 50;
+        if (depth >= 3 && !is_mate_score(result.score)) {
+            alpha = std::max(-SCORE_INFINITE, result.score - window);
+            beta = std::min(SCORE_INFINITE, result.score + window);
+        }
+        Score score = SCORE_DRAW;
+        while (true) {
+            iteration_best = {};
+            score = alpha_beta(current, depth, alpha, beta, 0, 0,
+                               &iteration_best);
+            if (aborted_ || (score > alpha && score < beta) ||
+                (alpha == -SCORE_INFINITE && beta == SCORE_INFINITE)) {
+                break;
+            }
+            window *= 2;
+            if (score <= alpha) {
+                alpha = std::max(-SCORE_INFINITE, score - window);
+            } else {
+                beta = std::min(SCORE_INFINITE, score + window);
+            }
+        }
         if (aborted_) break;
 
         result.best_move = iteration_best;
@@ -444,6 +507,20 @@ Search::AnalysisResult Search::analyze(const chess::Position& position,
         const int completed_count = completed.load(std::memory_order_relaxed);
         if (completed_count == move_count) {
             previous_lines = iteration_lines;
+            std::stable_sort(moves, moves + move_count,
+                [&](chess::Move lhs, chess::Move rhs) {
+                    const auto score_for = [&](chess::Move move) {
+                        const auto found = std::find_if(
+                            iteration_lines.begin(), iteration_lines.end(),
+                            [&](const AnalysisLine& line) {
+                                return line.move == move;
+                            });
+                        return found == iteration_lines.end()
+                            ? -SCORE_INFINITE
+                            : found->score;
+                    };
+                    return score_for(lhs) > score_for(rhs);
+                });
             result = make_snapshot(iteration_lines, depth, completed_count, true);
         } else {
             result = make_snapshot(iteration_lines, depth, completed_count, false);
@@ -465,7 +542,12 @@ Score Search::alpha_beta(chess::Position& position, int depth, Score alpha,
     if (ply >= MAX_PV_PLY - 1) return evaluate(position);
     pv_length_[static_cast<std::size_t>(ply)] = ply;
 
-    if (position.in_check() && extensions_used < MAX_CHECK_EXTENSIONS) {
+    if (position.is_repetition()) return SCORE_DRAW;
+    const bool in_check = position.in_check();
+    const bool fifty_move_draw = position.is_fifty_move_draw();
+    if (fifty_move_draw && !in_check) return SCORE_DRAW;
+
+    if (in_check && extensions_used < MAX_CHECK_EXTENSIONS) {
         ++depth;
         ++extensions_used;
         ++check_extensions_;
@@ -491,7 +573,7 @@ Score Search::alpha_beta(chess::Position& position, int depth, Score alpha,
         table_move = entry->best_move;
         // Check extensions are path-dependent. Reuse a cutoff only when the
         // stored search had at least as much extension budget available.
-        if (entry->depth >= depth &&
+        if (!entry->quiescence && entry->depth >= depth &&
             entry->extensions_used <= extensions_used) {
             const Score table_score = score_from_table(entry->score, ply);
             const bool cutoff =
@@ -508,23 +590,40 @@ Score Search::alpha_beta(chess::Position& position, int depth, Score alpha,
     chess::Move moves[chess::MOVE_NB];
     const int move_count = chess::generate_legal_moves(position, moves);
     if (move_count == 0) {
-        const Score terminal = position.in_check()
+        const Score terminal = in_check
             ? -SCORE_MATE + ply
             : SCORE_DRAW;
         table_.store(key, depth, extensions_used, score_to_table(terminal, ply),
                      TranspositionTable::Bound::Exact, chess::Move{});
         return terminal;
     }
+    if (fifty_move_draw) return SCORE_DRAW;
 
-    order_moves(position, moves, move_count, table_move);
+    const auto color_index = static_cast<std::size_t>(position.turn().id());
+    const auto* history = history_[color_index].data();
+    const auto* killers = ply < MAX_PV_PLY
+        ? &killers_[static_cast<std::size_t>(ply)]
+        : nullptr;
+    order_moves(position, moves, move_count, table_move, true, killers,
+                history);
 
     Score best = -SCORE_INFINITE;
     chess::Move best_move;
     for (int i = 0; i < move_count; ++i) {
         const auto move = moves[i];
         position.make_move(move);
-        const Score score = -alpha_beta(position, depth - 1, -beta, -alpha,
-                                        ply + 1, extensions_used, nullptr);
+        Score score;
+        if (i == 0) {
+            score = -alpha_beta(position, depth - 1, -beta, -alpha,
+                                ply + 1, extensions_used, nullptr);
+        } else {
+            score = -alpha_beta(position, depth - 1, -alpha - 1, -alpha,
+                                ply + 1, extensions_used, nullptr);
+            if (!aborted_ && score > alpha && score < beta) {
+                score = -alpha_beta(position, depth - 1, -beta, -alpha,
+                                    ply + 1, extensions_used, nullptr);
+            }
+        }
         position.undo_move(move);
 
         if (aborted_) return SCORE_DRAW;
@@ -536,7 +635,22 @@ Score Search::alpha_beta(chess::Position& position, int depth, Score alpha,
             if (root_best != nullptr) *root_best = move;
         }
         alpha = std::max(alpha, score);
-        if (alpha >= beta) break;
+        if (alpha >= beta) {
+            if (!is_noisy(position, move)) {
+                auto& ply_killers = killers_[static_cast<std::size_t>(ply)];
+                if (move != ply_killers[0]) {
+                    ply_killers[1] = ply_killers[0];
+                    ply_killers[0] = move;
+                }
+                const auto history_index =
+                    static_cast<std::size_t>(move.source()) * chess::SQUARE_NB +
+                    static_cast<std::size_t>(move.target());
+                auto& history_score = history_[color_index][history_index];
+                history_score = std::min<std::int32_t>(1'000'000,
+                    history_score + depth * depth);
+            }
+            break;
+        }
     }
 
     auto bound = TranspositionTable::Bound::Exact;
@@ -564,19 +678,56 @@ Score Search::quiescence(chess::Position& position, Score alpha, Score beta,
 
     if (position.play() >= chess::PLAY_NB - 1) return evaluate(position);
 
+    if (position.is_repetition()) return SCORE_DRAW;
     const bool in_check = position.in_check();
+    const bool fifty_move_draw = position.is_fifty_move_draw();
+    if (fifty_move_draw && !in_check) return SCORE_DRAW;
+
+    const auto key = position.key();
+    const Score original_alpha = alpha;
+    chess::Move table_move;
+    if (const auto* entry = table_.probe(key)) {
+        ++tt_hits_;
+        table_move = entry->best_move;
+        const Score table_score = score_from_table(entry->score, ply);
+        const int remaining_quiescence =
+            MAX_QUIESCENCE_PLY - quiescence_ply;
+        const bool deep_enough = !entry->quiescence ||
+            entry->quiescence_depth >= remaining_quiescence;
+        const bool cutoff = deep_enough && (
+            entry->bound == TranspositionTable::Bound::Exact ||
+            (entry->bound == TranspositionTable::Bound::Lower &&
+             table_score >= beta) ||
+            (entry->bound == TranspositionTable::Bound::Upper &&
+             table_score <= alpha));
+        if (cutoff) return table_score;
+    }
     if (quiescence_ply >= MAX_QUIESCENCE_PLY) {
         return evaluate(position) - (in_check ? 50 : 0);
     }
     chess::Move moves[chess::MOVE_NB];
     int move_count = 0;
+    Score stand_pat = -SCORE_INFINITE;
 
     if (in_check) {
         move_count = chess::generate_legal_moves(position, moves);
-        if (move_count == 0) return -SCORE_MATE + ply;
+        if (move_count == 0) {
+            const Score mate = -SCORE_MATE + ply;
+            table_.store(key, 0, 0,
+                score_to_table(mate, ply), TranspositionTable::Bound::Exact,
+                chess::Move{}, true, MAX_QUIESCENCE_PLY - quiescence_ply);
+            return mate;
+        }
+        if (fifty_move_draw) return SCORE_DRAW;
     } else {
-        const Score stand_pat = evaluate(position);
-        if (stand_pat >= beta) return stand_pat;
+        stand_pat = evaluate(position);
+        if (stand_pat >= beta) {
+            table_.store(key, 0, 0,
+                score_to_table(stand_pat, ply),
+                TranspositionTable::Bound::Lower, chess::Move{}, true,
+                MAX_QUIESCENCE_PLY - quiescence_ply);
+            return stand_pat;
+        }
         alpha = std::max(alpha, stand_pat);
         move_count = chess::generate_legal_moves(position, moves);
         int forcing_count = 0;
@@ -594,11 +745,21 @@ Score Search::quiescence(chess::Position& position, Score alpha, Score beta,
         if (move_count == 0) return stand_pat;
     }
 
-    order_moves(position, moves, move_count, chess::Move{});
+    order_moves(position, moves, move_count, table_move, false);
 
+    chess::Move best_move;
     for (int i = 0; i < move_count; ++i) {
         const auto move = moves[i];
+        const bool delta_candidate = !in_check &&
+            move.policy() != chess::Move::Policy::Evolve &&
+            stand_pat + tactical_gain(position, move) + DELTA_MARGIN < alpha;
+        const auto mover = position.turn();
         position.make_move(move);
+        if (delta_candidate && !position.in_check() &&
+            !position.in_check(mover.prev().id())) {
+            position.undo_move(move);
+            continue;
+        }
         const Score score = -quiescence(position, -beta, -alpha, ply + 1,
                                         quiescence_ply + 1);
         position.undo_move(move);
@@ -606,14 +767,23 @@ Score Search::quiescence(chess::Position& position, Score alpha, Score beta,
         if (aborted_) return SCORE_DRAW;
         if (score >= beta) {
             update_principal_variation(ply, move);
+            table_.store(key, 0, 0,
+                score_to_table(score, ply), TranspositionTable::Bound::Lower,
+                move, true, MAX_QUIESCENCE_PLY - quiescence_ply);
             return score;
         }
         if (score > alpha) {
             alpha = score;
+            best_move = move;
             update_principal_variation(ply, move);
         }
     }
 
+    const auto bound = alpha > original_alpha
+        ? TranspositionTable::Bound::Exact
+        : TranspositionTable::Bound::Upper;
+    table_.store(key, 0, 0, score_to_table(alpha, ply), bound, best_move,
+                 true, MAX_QUIESCENCE_PLY - quiescence_ply);
     return alpha;
 }
 
