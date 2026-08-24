@@ -60,14 +60,18 @@ target_link_libraries(search_test PRIVATE
 
 gtest_discover_tests(search_test)
 
-add_test(
-    NAME SearchAccuracyBenchmark
-    COMMAND bash ${CMAKE_SOURCE_DIR}/tools/bench.sh --check
-)
-set_tests_properties(SearchAccuracyBenchmark PROPERTIES
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    TIMEOUT 120
-)
+find_program(ATHENA_BASH_EXECUTABLE bash)
+if(ATHENA_BASH_EXECUTABLE)
+    add_test(
+        NAME SearchAccuracyBenchmark
+        COMMAND ${ATHENA_BASH_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tools/bench.sh --check
+    )
+    set_tests_properties(SearchAccuracyBenchmark PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        TIMEOUT 120
+    )
+endif()
 
 # -------------------------
 # Benchmarks
