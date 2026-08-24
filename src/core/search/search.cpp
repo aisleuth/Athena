@@ -6,6 +6,7 @@
 #include <mutex>
 #include <optional>
 #include <thread>
+#include <unordered_map>
 #include "chess/constants.h"
 #include "chess/movegen.h"
 #include "chess/zobrist.h"
@@ -18,7 +19,7 @@ constexpr std::array<int, chess::PIECE_NB> ORDER_VALUE = {
     20'000, 300, 350, 500, 1'000, 100
 };
 
-constexpr int MAX_CHECK_EXTENSIONS = 4;
+constexpr int MAX_CHECK_EXTENSIONS = 2;
 constexpr int MAX_QUIESCENCE_PLY = 16;
 constexpr int MAX_QUIESCENCE_CHECK_PLY = 2;
 constexpr Score DELTA_MARGIN = 150;
@@ -193,6 +194,7 @@ Search::Result Search::think(const chess::Position& position, const Limits& limi
     Result result;
     chess::Position current = position;
     const auto started = std::chrono::steady_clock::now();
+    table_.resize(hash_megabytes_);
     table_.new_search();
     killers_ = {};
     history_ = {};
@@ -347,19 +349,25 @@ Search::AnalysisResult Search::analyze(const chess::Position& position,
     }
 
     const int worker_count = std::max(1, std::min(threads_, move_count));
-    std::vector<std::unique_ptr<Search>> owned_workers;
     std::vector<Search*> workers;
-    owned_workers.reserve(static_cast<std::size_t>(std::max(0, worker_count - 1)));
     workers.reserve(static_cast<std::size_t>(worker_count));
     const auto worker_hash = std::max<std::size_t>(
         1, hash_megabytes_ / static_cast<std::size_t>(worker_count));
-    if (worker_count > 1) table_.resize(worker_hash);
+    table_.resize(worker_hash);
     workers.push_back(this);
+    const auto auxiliary_count = static_cast<std::size_t>(
+        std::max(0, worker_count - 1));
+    while (analysis_workers_.size() < auxiliary_count) {
+        analysis_workers_.push_back(std::make_unique<Search>(worker_hash));
+    }
+    if (analysis_workers_.size() > auxiliary_count) {
+        analysis_workers_.resize(auxiliary_count);
+    }
     for (int index = 1; index < worker_count; ++index) {
-        auto worker = std::make_unique<Search>(worker_hash);
-        worker->prepare_worker(limits, started, &stop_requested_);
-        workers.push_back(worker.get());
-        owned_workers.push_back(std::move(worker));
+        auto& worker = *analysis_workers_[static_cast<std::size_t>(index - 1)];
+        worker.resize_hash(worker_hash);
+        worker.prepare_worker(limits, started, &stop_requested_);
+        workers.push_back(&worker);
     }
 
     std::vector<std::atomic<std::uint64_t>> worker_nodes(
@@ -459,6 +467,7 @@ Search::AnalysisResult Search::analyze(const chess::Position& position,
             };
             worker.next_heartbeat_ = std::chrono::steady_clock::now() +
                 std::chrono::milliseconds(200);
+            auto branch = position;
             while (!stop_requested_.load(std::memory_order_relaxed)) {
                 const int move_index = next_move.fetch_add(
                     1, std::memory_order_relaxed);
@@ -466,11 +475,13 @@ Search::AnalysisResult Search::analyze(const chess::Position& position,
 
                 worker.pv_length_.fill(0);
                 worker.aborted_ = false;
-                auto branch = position;
                 const auto move = moves[move_index];
                 branch.make_move(move);
                 const Score score = -worker.alpha_beta(branch, depth - 1,
                     -SCORE_INFINITE, SCORE_INFINITE, 1, 0, nullptr);
+                const auto cached_variation =
+                    worker.extract_principal_variation(branch, depth - 1);
+                branch.undo_move(move);
 
                 publish_worker_stats();
                 if (worker.aborted_) break;
@@ -484,6 +495,11 @@ Search::AnalysisResult Search::analyze(const chess::Position& position,
                 for (int index = 1; index < child_length; ++index) {
                     line.principal_variation.push_back(
                         worker.pv_table_[1][static_cast<std::size_t>(index)]);
+                }
+                if (line.principal_variation.size() == 1U) {
+                    line.principal_variation.insert(
+                        line.principal_variation.end(),
+                        cached_variation.begin(), cached_variation.end());
                 }
                 {
                     std::lock_guard lock(publish_mutex);
@@ -507,19 +523,15 @@ Search::AnalysisResult Search::analyze(const chess::Position& position,
         const int completed_count = completed.load(std::memory_order_relaxed);
         if (completed_count == move_count) {
             previous_lines = iteration_lines;
+            std::unordered_map<std::uint32_t, Score> root_scores;
+            root_scores.reserve(iteration_lines.size());
+            for (const auto& line : iteration_lines) {
+                root_scores.emplace(line.move.value(), line.score);
+            }
             std::stable_sort(moves, moves + move_count,
                 [&](chess::Move lhs, chess::Move rhs) {
-                    const auto score_for = [&](chess::Move move) {
-                        const auto found = std::find_if(
-                            iteration_lines.begin(), iteration_lines.end(),
-                            [&](const AnalysisLine& line) {
-                                return line.move == move;
-                            });
-                        return found == iteration_lines.end()
-                            ? -SCORE_INFINITE
-                            : found->score;
-                    };
-                    return score_for(lhs) > score_for(rhs);
+                    return root_scores.at(lhs.value()) >
+                        root_scores.at(rhs.value());
                 });
             result = make_snapshot(iteration_lines, depth, completed_count, true);
         } else {
@@ -530,8 +542,6 @@ Search::AnalysisResult Search::analyze(const chess::Position& position,
         if (should_stop()) break;
     }
 
-    owned_workers.clear();
-    if (worker_count > 1) table_.resize(hash_megabytes_);
     external_stop_ = nullptr;
     return result;
 }
@@ -554,7 +564,7 @@ Score Search::alpha_beta(chess::Position& position, int depth, Score alpha,
     }
 
     if (depth <= 0) {
-        return quiescence(position, alpha, beta, ply, 0);
+        return quiescence(position, alpha, beta, ply, 0, extensions_used);
     }
 
     ++nodes_;
@@ -645,9 +655,9 @@ Score Search::alpha_beta(chess::Position& position, int depth, Score alpha,
                 const auto history_index =
                     static_cast<std::size_t>(move.source()) * chess::SQUARE_NB +
                     static_cast<std::size_t>(move.target());
-                auto& history_score = history_[color_index][history_index];
-                history_score = std::min<std::int32_t>(1'000'000,
-                    history_score + depth * depth);
+                auto& history_entry = history_[color_index][history_index];
+                history_entry = std::min<std::int32_t>(1'000'000,
+                    history_entry + depth * depth);
             }
             break;
         }
@@ -663,7 +673,8 @@ Score Search::alpha_beta(chess::Position& position, int depth, Score alpha,
 }
 
 Score Search::quiescence(chess::Position& position, Score alpha, Score beta,
-                         int ply, int quiescence_ply) {
+                         int ply, int quiescence_ply,
+                         int extensions_used) {
     if (ply >= MAX_PV_PLY - 1) return evaluate(position);
     pv_length_[static_cast<std::size_t>(ply)] = ply;
 
@@ -692,8 +703,8 @@ Score Search::quiescence(chess::Position& position, Score alpha, Score beta,
         const Score table_score = score_from_table(entry->score, ply);
         const int remaining_quiescence =
             MAX_QUIESCENCE_PLY - quiescence_ply;
-        const bool deep_enough = !entry->quiescence ||
-            entry->quiescence_depth >= remaining_quiescence;
+        const bool deep_enough = entry->covers_quiescence(
+            remaining_quiescence, extensions_used);
         const bool cutoff = deep_enough && (
             entry->bound == TranspositionTable::Bound::Exact ||
             (entry->bound == TranspositionTable::Bound::Lower &&
@@ -761,7 +772,7 @@ Score Search::quiescence(chess::Position& position, Score alpha, Score beta,
             continue;
         }
         const Score score = -quiescence(position, -beta, -alpha, ply + 1,
-                                        quiescence_ply + 1);
+                                        quiescence_ply + 1, extensions_used);
         position.undo_move(move);
 
         if (aborted_) return SCORE_DRAW;

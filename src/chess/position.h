@@ -17,7 +17,7 @@ public:
     using Clock = uint16_t;
     using Depth = uint16_t;
 
-    struct alignas(4) State // copy assignment optimized
+    struct alignas(4) State
     {
         PieceColor capture;
         Square     enpass;
@@ -59,7 +59,6 @@ public:
     void undo_move(Move move) noexcept;
 
     void make_move(const std::string& move, bool board16x16 = false) noexcept;
-    void undo_move(const std::string& move, bool board16x16 = false) noexcept;
 
     // Bitboard teammate() const noexcept { return bitboard(turn_.self().id()) | bitboard(turn_.ally().id()); }
     // Bitboard opponent() const noexcept { return bitboard(turn_.next().id()) | bitboard(turn_.prev().id()); }
@@ -134,7 +133,8 @@ private:
         color_.fill(Bitboard(0ULL));
 
         for (int sq = 0; sq < SQUARE_NB; ++sq) {
-            board_[sq] = Square(static_cast<Square::ID>(sq)).isStone()
+            board_[static_cast<std::size_t>(sq)] =
+                Square(static_cast<Square::ID>(sq)).isStone()
                        ? PieceColor::stone()
                        : PieceColor::empty();
         }

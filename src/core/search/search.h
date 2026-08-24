@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <vector>
 #include "chess/move.h"
 #include "chess/position.h"
@@ -61,10 +62,14 @@ public:
 
     void reset() noexcept;
     void stop() noexcept;
-    void clear_hash() noexcept { table_.clear(); }
+    void clear_hash() noexcept {
+        table_.clear();
+        for (auto& worker : analysis_workers_) worker->table_.clear();
+    }
     void resize_hash(std::size_t megabytes) {
         hash_megabytes_ = megabytes == 0 ? 1 : megabytes;
         table_.resize(hash_megabytes_);
+        analysis_workers_.clear();
     }
     void set_threads(int threads) noexcept;
     int threads() const noexcept { return threads_; }
@@ -78,7 +83,7 @@ private:
                      Score beta, int ply, int extensions_used,
                      chess::Move* root_best);
     Score quiescence(chess::Position& position, Score alpha, Score beta,
-                     int ply, int quiescence_ply);
+                     int ply, int quiescence_ply, int extensions_used);
     std::vector<chess::Move> extract_principal_variation(
         const chess::Position& position, int max_plies) const;
     void update_principal_variation(int ply, chess::Move move) noexcept;
@@ -109,6 +114,7 @@ private:
     TranspositionTable table_;
     std::size_t hash_megabytes_{16};
     int threads_{1};
+    std::vector<std::unique_ptr<Search>> analysis_workers_;
 };
 
 } // namespace athena

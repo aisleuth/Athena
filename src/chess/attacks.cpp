@@ -54,8 +54,11 @@ PRECOMPUTED_TABLE_CRAWL = []() consteval {
     for (int s = 0; s < SQUARE_NB; s++) {
         Square sq(static_cast<Square::ID>(s));
         if (sq.isStone()) continue;
-        for (int i=0; i<CRAWL_NB; i++) table[sq.compact()].first  |= bitboard(sq, offsets_1[i], false);
-        for (int i=0; i<CRAWL_NB; i++) table[sq.compact()].second |= bitboard(sq, offsets_2[i], false);
+        for (int i = 0; i < CRAWL_NB; ++i) {
+            const auto index = static_cast<std::size_t>(i);
+            table[sq.compact()].first |= bitboard(sq, offsets_1[index], false);
+            table[sq.compact()].second |= bitboard(sq, offsets_2[index], false);
+        }
     }
     return table;
 }();

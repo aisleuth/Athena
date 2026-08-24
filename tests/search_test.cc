@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <future>
 #include <string>
 #include <thread>
@@ -32,6 +33,35 @@ void play_uci(chess::Position& position, const std::string& uci) {
         }
     }
     FAIL() << "Illegal test move: " << uci;
+}
+
+struct HashWalkStats {
+    std::uint64_t nodes = 0;
+    std::uint64_t mismatches = 0;
+    std::uint64_t castles = 0;
+    std::uint64_t en_passants = 0;
+};
+
+void verify_hash_tree(chess::Position& position, int depth,
+                      HashWalkStats& stats) {
+    ++stats.nodes;
+    if (position.key() != chess::zobrist::recompute(position)) {
+        ++stats.mismatches;
+    }
+    if (depth == 0) return;
+
+    chess::Move moves[chess::MOVE_NB];
+    const int count = chess::generate_legal_moves(position, moves);
+    for (int index = 0; index < count; ++index) {
+        const auto move = moves[index];
+        if (move.policy() == chess::Move::Policy::Castle) ++stats.castles;
+        if (move.policy() == chess::Move::Policy::Enpass) ++stats.en_passants;
+        const auto original_key = position.key();
+        position.make_move(move);
+        verify_hash_tree(position, depth - 1, stats);
+        position.undo_move(move);
+        if (position.key() != original_key) ++stats.mismatches;
+    }
 }
 
 chess::Position coordinated_mate_position() {
@@ -240,6 +270,64 @@ TEST(PositionTest, FourPlayerFiftyMoveClockUsesCompleteRounds) {
     EXPECT_TRUE(position.is_fifty_move_draw());
 }
 
+TEST(PositionTest, IncrementalHashMatchesExhaustiveMoveTrees) {
+    auto starting_position = modern_start_position();
+    HashWalkStats starting_stats;
+    verify_hash_tree(starting_position, 5, starting_stats);
+    EXPECT_EQ(starting_stats.nodes, 3'612'576U);
+    EXPECT_EQ(starting_stats.mismatches, 0U);
+    EXPECT_EQ(starting_stats.en_passants, 1'580U);
+
+    chess::Position castling_position;
+    castling_position.set_setup(chess::Castle::Setup::Modern);
+    castling_position.init(
+        "R-0,0,0,0-1,1,1,1-1,1,1,1-0,0,0,0-0-"
+        "x,x,x,yR,2,yK,3,yR,x,x,x/"
+        "x,x,x,yP,yP,yP,yP,yP,yP,yP,yP,x,x,x/"
+        "x,x,x,8,x,x,x/"
+        "bR,bP,10,gP,gR/1,bP,10,gP,1/1,bP,10,gP,1/"
+        "1,bP,10,gP,gK/bK,bP,10,gP,1/1,bP,10,gP,1/"
+        "1,bP,10,gP,1/bR,bP,10,gP,gR/"
+        "x,x,x,8,x,x,x/"
+        "x,x,x,rP,rP,rP,rP,rP,rP,rP,rP,x,x,x/"
+        "x,x,x,rR,3,rK,2,rR,x,x,x");
+    HashWalkStats castling_stats;
+    verify_hash_tree(castling_position, 4, castling_stats);
+    EXPECT_EQ(castling_stats.nodes, 343'252U);
+    EXPECT_EQ(castling_stats.mismatches, 0U);
+    EXPECT_EQ(castling_stats.castles, 1'150U);
+}
+
+TEST(TranspositionTableTest, MainEntriesRespectCheckExtensionBudgetInQuiescence) {
+    core::TranspositionTable::Entry entry;
+    entry.quiescence = false;
+    entry.extensions_used = 4;
+
+    EXPECT_FALSE(entry.covers_quiescence(16, 0));
+    EXPECT_FALSE(entry.covers_quiescence(16, 3));
+    EXPECT_TRUE(entry.covers_quiescence(16, 4));
+
+    entry.quiescence = true;
+    entry.quiescence_depth = 7;
+    EXPECT_FALSE(entry.covers_quiescence(8, 0));
+    EXPECT_TRUE(entry.covers_quiescence(7, 0));
+}
+
+TEST(TranspositionTableTest, SameCapacityResizePreservesEntries) {
+    core::TranspositionTable table(16);
+    constexpr chess::zobrist::Key key = 0x123456789abcdef0ULL;
+    table.store(key, 5, 0, 42, core::TranspositionTable::Bound::Exact,
+                chess::Move{});
+    ASSERT_NE(table.probe(key), nullptr);
+
+    table.resize(16);
+
+    const auto* entry = table.probe(key);
+    ASSERT_NE(entry, nullptr);
+    EXPECT_EQ(entry->score, 42);
+    EXPECT_EQ(entry->depth, 5);
+}
+
 TEST(PositionTest, DetectsCheckForAPlayerWhoIsNotOnMove) {
     auto position = coordinated_mate_position();
     position.set_board(chess::Square("k8"),
@@ -431,6 +519,25 @@ TEST(SearchTest, ParallelRankedAnalysisMatchesSingleThreadedScores) {
         EXPECT_EQ(found->score, expected_line.score)
             << expected_line.move.uci();
     }
+}
+
+TEST(SearchTest, WarmRankedAnalysisReconstructsPrincipalVariations) {
+    const auto position = modern_start_position();
+    core::Search::Limits limits;
+    limits.depth = 3;
+
+    core::Search search;
+    search.set_threads(1);
+    search.clear_hash();
+    const auto first = search.analyze(position, limits, 64);
+    const auto second = search.analyze(position, limits, 64);
+
+    EXPECT_TRUE(first.iteration_complete);
+    EXPECT_TRUE(second.iteration_complete);
+    EXPECT_LT(second.nodes, first.nodes);
+    EXPECT_GT(second.tt_hits, 0U);
+    ASSERT_FALSE(second.lines.empty());
+    EXPECT_GE(second.lines.front().principal_variation.size(), 3U);
 }
 
 TEST(SearchTest, ThreadCountIsClampedToSupportedRange) {

@@ -5,6 +5,7 @@
 #include <iostream>
 #include <iomanip>
 #include <cstring>
+#include <limits>
 #include <sstream>
 #include "position.h"
 #include "castle.h"
@@ -233,11 +234,12 @@ bool Position::is_repetition(int required_occurrences) const noexcept {
     return false;
 }
 
-void Position::undo_move(const std::string& move, bool board16x16) noexcept {}
 void Position::make_move(const std::string& move, bool board16x16) noexcept {
 
-    bool promote = !std::isdigit(move.back());
-    auto x = std::isdigit(move[2]) ? 3 : 2;
+    const bool promote =
+        !std::isdigit(static_cast<unsigned char>(move.back()));
+    const std::size_t x =
+        std::isdigit(static_cast<unsigned char>(move[2])) ? 3U : 2U;
     auto evolve = promote ? Piece(move.back()) : Piece::ID::Empty;
     auto source = Square(move.substr(0, x), board16x16);
     auto target = Square(promote ? move.substr(x, move.size() - x - 1)
@@ -487,7 +489,8 @@ void Position::init(const FEN& fen) noexcept {
 
     // 1. Parse turn //
     std::getline(ss, token, '-');
-    turn_ = Color(std::tolower(token[0]));
+    turn_ = Color(static_cast<char>(
+        std::tolower(static_cast<unsigned char>(token[0]))));
     std::getline(ss, token, '-');
 
     // 2. Parse castling rights //
@@ -503,7 +506,9 @@ void Position::init(const FEN& fen) noexcept {
     // 3. Parse fiftymove //
     std::getline(ss, token, '-');
     std::getline(ss, token, '-');
-    st.fifty_move_clock = std::stoi(token);
+    st.fifty_move_clock = static_cast<Clock>(std::clamp(
+        std::stoi(token), 0,
+        static_cast<int>(std::numeric_limits<Clock>::max())));
 
     // 4. Parse enpassant //
     std::getline(ss, token, '-');
@@ -542,9 +547,11 @@ void Position::init(const FEN& fen) noexcept {
         std::istringstream rankss(rankStr);
         std::string fileStr;
         while (std::getline(rankss, fileStr, ',')) {
-            Square sq = Square(col++, row);
+            Square sq = Square(static_cast<Square::File>(col++),
+                               static_cast<Square::Rank>(row));
             if (sq.isStone()) continue;
-            if (std::all_of(fileStr.begin(), fileStr.end(), ::isdigit)) {
+            if (std::all_of(fileStr.begin(), fileStr.end(),
+                    [](unsigned char value) { return std::isdigit(value); })) {
                 col += std::stoi(fileStr) - 1;
                 continue;
             }
@@ -568,7 +575,8 @@ Position::FEN Position::fen() const noexcept {
     std::string output = "";
 
     // 1. Turn //
-    output += std::toupper(turn().uci());
+    output += static_cast<char>(
+        std::toupper(static_cast<unsigned char>(turn().uci())));
     output += '-';
 
     // 2. Status //
@@ -621,7 +629,8 @@ Position::FEN Position::fen() const noexcept {
     for (int row = 14; row >= 1; row--) {
     for (int col = 1; col <= 14; col++) {
 
-        auto sq = Square(col, row);
+        auto sq = Square(static_cast<Square::File>(col),
+                         static_cast<Square::Rank>(row));
         auto pc = board(sq.id());
 
         if (pc == PieceColor::stone()) {
@@ -665,11 +674,14 @@ void Position::print(bool board16x16) const {
     int end   = board16x16 ? RANK_NB:  RANK_NB - 1;
     std::cout << "\n     ";
     for (int file = start; file < end; ++file)std::cout << static_cast<char>('a' + (file - start)) << "  ";
-    std::cout << "\n   +" << std::string((end - start) * 3 + 1, '-') << "+\n";
+    const auto border_width = static_cast<std::size_t>(
+        (end - start) * 3 + 1);
+    std::cout << "\n   +" << std::string(border_width, '-') << "+\n";
     for (int rank = end - 1; rank >= start; --rank) {
         std::cout << (((rank - start + 1) < 10) ? " " : "") << (rank - start + 1) << " | ";
         for (int file = start; file < end; ++file) {
-            auto sq = Square(file, rank);
+            auto sq = Square(static_cast<Square::File>(file),
+                             static_cast<Square::Rank>(rank));
             auto pc = board(sq.id());
             auto piece = pc.piece();
             auto color = pc.color();
@@ -696,7 +708,7 @@ void Position::print(bool board16x16) const {
             }
             std::cout << "| " << (rank - start + 1) << "\n";
     }
-    std::cout << "   +" << std::string((end - start) * 3 + 1, '-') << "+\n";
+    std::cout << "   +" << std::string(border_width, '-') << "+\n";
     std::cout << "     ";
     for (int file = start; file < end; ++file) std::cout << static_cast<char>('a' + (file - start)) << "  ";
     std::cout << "\n";

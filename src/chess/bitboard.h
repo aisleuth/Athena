@@ -209,7 +209,7 @@ public:
     static Square pop_lsb(Bitboard& bb) noexcept {
         for (int i = 0; i < 4; ++i) {
             if (bb.chunks_[i])
-                return pop_lsb(bb.chunks_[i], i);
+                return pop_lsb(bb.chunks_[i], static_cast<ChunkID>(i));
         }
         return Square::offboard();
     }
@@ -217,7 +217,7 @@ public:
     static Square pop_msb(Bitboard& bb) noexcept {
         for (int i = 3; i >= 0; --i) {
             if (bb.chunks_[i])
-                return pop_msb(bb.chunks_[i], i);
+                return pop_msb(bb.chunks_[i], static_cast<ChunkID>(i));
         }
         return Square::offboard();
     }
@@ -235,7 +235,7 @@ public:
     static Square lsb(const Bitboard& bb) noexcept {
         for (int i = 0; i < 4; ++i) {
             if (bb.chunks_[i])
-                return lsb(bb.chunks_[i], i);
+                return lsb(bb.chunks_[i], static_cast<ChunkID>(i));
         }
         return Square::offboard();
     }
@@ -243,7 +243,7 @@ public:
     static Square msb(const Bitboard& bb) noexcept {
         for (int i = 3; i >= 0; --i) {
             if (bb.chunks_[i])
-                return msb(bb.chunks_[i], i);
+                return msb(bb.chunks_[i], static_cast<ChunkID>(i));
         }
         return Square::offboard();
     }
@@ -315,7 +315,8 @@ inline void Bitboard::print(bool board16x16) const {
         for (int file = 0; file < size; ++file) {
             int r = rank + offset;
             int f = file + offset;
-            auto sq = Square(f, r);
+            auto sq = Square(static_cast<Square::File>(f),
+                             static_cast<Square::Rank>(r));
             bool valid = sq.isStone();
             bool set = has_bit(sq);
             if (set) std::cout << (!valid ? "\033[34mX\033[0m" : "\033[90mX\033[0m");

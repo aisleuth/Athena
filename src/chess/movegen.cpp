@@ -482,7 +482,9 @@ int generate_all_moves(const Position& pos, Move* moves) noexcept {
     if constexpr (flag != Move::Flag::Noisy) 
         moves = generate_castle_moves<color>(pos, moves);
 
-    return generate_pin_moves<flag, color>(pos, moves, pinned, mask, checks) - start;
+    return static_cast<int>(
+        generate_pin_moves<flag, color>(pos, moves, pinned, mask, checks) -
+        start);
 }
 
 [[nodiscard]] int generate_noisy_moves(Position& pos, Move* moves) noexcept {

@@ -94,10 +94,11 @@ private:
 
 private:
     static Square::ID square(Setup setup, Color::ID color, Side side,  int idx = 0) noexcept {
-        return table_[
+        const auto index =
             64 * static_cast<int>(setup) +
             16 * static_cast<int>(color) + 
-            8  * static_cast<int>(side ) + idx];
+            8  * static_cast<int>(side ) + idx;
+        return table_[static_cast<std::size_t>(index)];
     }
 
 public:

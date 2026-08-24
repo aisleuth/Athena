@@ -6,7 +6,7 @@
 using namespace athena;
 
 static void BM_Perft_Modern(benchmark::State& state) {
-    const int depth = state.range(0);
+    const int depth = static_cast<int>(state.range(0));
     const auto setup = chess::Castle::Setup::Modern;
 
     chess::Position base;

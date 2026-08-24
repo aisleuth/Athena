@@ -28,6 +28,13 @@ public:
         std::uint8_t generation = 0;
         bool quiescence = false;
         Bound bound = Bound::None;
+
+        bool covers_quiescence(int remaining_depth,
+                               int current_extensions_used) const noexcept {
+            return quiescence
+                ? quiescence_depth >= remaining_depth
+                : extensions_used <= current_extensions_used;
+        }
     };
 
     explicit TranspositionTable(std::size_t megabytes = 16);

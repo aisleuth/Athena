@@ -23,8 +23,10 @@ void TranspositionTable::resize(std::size_t megabytes) {
     const auto bytes = megabytes * 1024ULL * 1024ULL;
     const auto requested = std::max<std::size_t>(1, bytes / sizeof(Entry));
     const auto capacity = floor_power_of_two(requested);
+    if (entries_.size() == capacity) return;
     entries_.assign(capacity, Entry{});
     mask_ = capacity - 1;
+    generation_ = 0;
 }
 
 void TranspositionTable::clear() noexcept {

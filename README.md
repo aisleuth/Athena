@@ -74,7 +74,8 @@ completion for the current depth pass and live node/time totals; it resets as
 the engine enters each deeper pass. Checks and captures are searched before
 quiet root moves.
 
-The `Threads` control parallelizes candidate root moves during ranked GUI
+The GUI's `Threads` control (`AnalysisThreads` in the engine protocol)
+parallelizes candidate root moves during ranked GUI
 analysis. One thread is the default for lower heat and power use; two to four
 threads can finish a depth pass faster on multi-core computers. The selected
 hash budget is divided across the analysis workers.
@@ -104,7 +105,7 @@ option.
 |---------------|-----------------------------------------------------------------------------|
 | `uci`         | Identifies the engine and returns its name, version, and supported options. |
 | `isready`     | Checks if the engine is ready; responds with `readyok` when synchronized.   |
-| `setoption`   | Sets a configuration option such as `Setup`, `Hash`, or `Threads`.          |
+| `setoption`   | Sets a configuration option such as `Setup`, `Hash`, or `AnalysisThreads`.  |
 | `ucinewgame`  | Notifies the engine that a new game is about to begin.                      |
 | `position`    | Sets `startpos` or a four-player FEN, optionally followed by legal moves.   |
 | `go`          | Starts an asynchronous search (`depth`, `movetime`, or `infinite`).          |
@@ -125,7 +126,7 @@ go depth 5
 |-----------|----------|--------------------------------------------------------------------|
 | `Setup`   | `modern` | Board setup variant to use (`modern` or `classic`).                |
 | `Hash`    | `16`     | Transposition-table size in MiB (`1` to `1024`).                    |
-| `Threads` | `1`      | Root-analysis worker threads (`1` to `4`; ranked analysis only).    |
+| `AnalysisThreads` | `1` | Root-analysis worker threads (`1` to `4`; ranked analysis only). |
 
 ### Debug Commands
 
@@ -162,7 +163,7 @@ Athena also provides additional commands for testing and debugging:
 - Check pressure against either opposing king, including the opponent who moves later
 
 ### Current limitations
-- The standard `go` command is single-threaded; `Threads` applies to ranked analysis
+- The standard `go` command is single-threaded; `AnalysisThreads` applies to ranked analysis
 - Hand-tuned evaluation rather than a trained network
 - No built-in Chess.com connection (the local graphical interface is manual)
 - Team mode only; free-for-all scoring and elimination are not implemented

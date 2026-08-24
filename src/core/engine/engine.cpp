@@ -27,7 +27,8 @@ Engine::Engine() {
             search_.resize_hash(static_cast<std::size_t>(
                 static_cast<const SpinOption&>(o).getValue()));
         });
-    options_["threads"] = std::make_unique<SpinOption>("threads", 1, 1, 4,
+    options_["analysisthreads"] = std::make_unique<SpinOption>(
+        "analysisthreads", 1, 1, 4,
         [this](const Option& o) {
             stop();
             search_.set_threads(

@@ -253,7 +253,7 @@ const server = createServer(async (request, response) => {
       }
       if (body.threads !== undefined) {
         threads = Math.min(4, Math.max(1, Number(body.threads) || 1));
-        commands.push(`setoption name Threads value ${threads}`);
+        commands.push(`setoption name AnalysisThreads value ${threads}`);
       }
       if (!commands.length) return json(response, 400, { error: "No option supplied" });
       engine.interrupt();
