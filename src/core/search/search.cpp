@@ -2,6 +2,10 @@
 #include <algorithm>
 #include <array>
 #include <iostream>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <thread>
 #include "chess/constants.h"
 #include "chess/movegen.h"
 #include "chess/zobrist.h"
@@ -96,12 +100,37 @@ Score score_from_table(Score score, int ply) noexcept {
 
 } // namespace
 
+Search::Search(std::size_t hash_megabytes)
+    : table_(std::max<std::size_t>(1, hash_megabytes)),
+      hash_megabytes_(std::max<std::size_t>(1, hash_megabytes)) {}
+
 void Search::reset() noexcept {
     stop_requested_.store(false, std::memory_order_relaxed);
 }
 
 void Search::stop() noexcept {
     stop_requested_.store(true, std::memory_order_relaxed);
+}
+
+void Search::set_threads(int threads) noexcept {
+    threads_ = std::clamp(threads, 1, 4);
+}
+
+void Search::prepare_worker(
+    const Limits& limits, std::chrono::steady_clock::time_point started,
+    const std::atomic_bool* external_stop) noexcept {
+    reset();
+    external_stop_ = external_stop;
+    nodes_ = 0;
+    quiescence_nodes_ = 0;
+    tt_hits_ = 0;
+    check_extensions_ = 0;
+    quiescence_checks_ = 0;
+    selective_depth_ = 0;
+    aborted_ = false;
+    has_deadline_ = limits.move_time.count() > 0 && !limits.infinite;
+    if (has_deadline_) deadline_ = started + limits.move_time;
+    heartbeat_ = {};
 }
 
 bool Search::should_stop() noexcept {
@@ -114,7 +143,10 @@ bool Search::should_stop() noexcept {
             stop_requested_.store(true, std::memory_order_relaxed);
         }
     }
-    if (stop_requested_.load(std::memory_order_relaxed)) return true;
+    if (stop_requested_.load(std::memory_order_relaxed) ||
+        (external_stop_ && external_stop_->load(std::memory_order_relaxed))) {
+        return true;
+    }
     return has_deadline_ && now >= deadline_;
 }
 
@@ -130,6 +162,7 @@ Search::Result Search::think(const chess::Position& position, const Limits& limi
     quiescence_checks_ = 0;
     selective_depth_ = 0;
     aborted_ = false;
+    external_stop_ = nullptr;
     has_deadline_ = limits.move_time.count() > 0 && !limits.infinite;
     if (has_deadline_) deadline_ = started + limits.move_time;
 
@@ -229,15 +262,7 @@ Search::AnalysisResult Search::analyze(const chess::Position& position,
     chess::Position current = position;
     const auto started = std::chrono::steady_clock::now();
 
-    nodes_ = 0;
-    quiescence_nodes_ = 0;
-    tt_hits_ = 0;
-    check_extensions_ = 0;
-    quiescence_checks_ = 0;
-    selective_depth_ = 0;
-    aborted_ = false;
-    has_deadline_ = limits.move_time.count() > 0 && !limits.infinite;
-    if (has_deadline_) deadline_ = started + limits.move_time;
+    prepare_worker(limits, started, nullptr);
 
     const int remaining_history =
         chess::PLAY_NB - static_cast<int>(position.play()) - 1;
@@ -257,6 +282,31 @@ Search::AnalysisResult Search::analyze(const chess::Position& position,
         current.undo_move(move);
         previous_lines.push_back({move, score, 0, {move}});
     }
+
+    const int worker_count = std::max(1, std::min(threads_, move_count));
+    std::vector<std::unique_ptr<Search>> owned_workers;
+    std::vector<Search*> workers;
+    owned_workers.reserve(static_cast<std::size_t>(std::max(0, worker_count - 1)));
+    workers.reserve(static_cast<std::size_t>(worker_count));
+    const auto worker_hash = std::max<std::size_t>(
+        1, hash_megabytes_ / static_cast<std::size_t>(worker_count));
+    if (worker_count > 1) table_.resize(worker_hash);
+    workers.push_back(this);
+    for (int index = 1; index < worker_count; ++index) {
+        auto worker = std::make_unique<Search>(worker_hash);
+        worker->prepare_worker(limits, started, &stop_requested_);
+        workers.push_back(worker.get());
+        owned_workers.push_back(std::move(worker));
+    }
+
+    std::vector<std::atomic<std::uint64_t>> worker_nodes(
+        static_cast<std::size_t>(worker_count));
+    std::vector<std::atomic<std::uint64_t>> worker_qnodes(
+        static_cast<std::size_t>(worker_count));
+    std::vector<std::atomic<std::uint64_t>> worker_tt_hits(
+        static_cast<std::size_t>(worker_count));
+    std::vector<std::atomic<int>> worker_seldepth(
+        static_cast<std::size_t>(worker_count));
 
     auto make_snapshot = [&](const std::vector<AnalysisLine>& current_lines,
                              int depth, int completed,
@@ -281,10 +331,19 @@ Search::AnalysisResult Search::analyze(const chess::Position& position,
         snapshot.root_moves_completed = completed;
         snapshot.root_move_count = move_count;
         snapshot.iteration_complete = iteration_complete;
-        snapshot.selective_depth = selective_depth_;
-        snapshot.nodes = nodes_;
-        snapshot.quiescence_nodes = quiescence_nodes_;
-        snapshot.tt_hits = tt_hits_;
+        for (int index = 0; index < worker_count; ++index) {
+            snapshot.selective_depth = std::max(snapshot.selective_depth,
+                worker_seldepth[static_cast<std::size_t>(index)].load(
+                    std::memory_order_relaxed));
+            snapshot.nodes += worker_nodes[static_cast<std::size_t>(index)].load(
+                std::memory_order_relaxed);
+            snapshot.quiescence_nodes +=
+                worker_qnodes[static_cast<std::size_t>(index)].load(
+                    std::memory_order_relaxed);
+            snapshot.tt_hits +=
+                worker_tt_hits[static_cast<std::size_t>(index)].load(
+                    std::memory_order_relaxed);
+        }
         snapshot.elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - started);
         return snapshot;
@@ -295,58 +354,108 @@ Search::AnalysisResult Search::analyze(const chess::Position& position,
     if (callback) callback(result);
 
     for (int depth = 1; depth <= maximum_depth && move_count > 0; ++depth) {
-        iteration_lines.clear();
-        iteration_lines.reserve(static_cast<std::size_t>(move_count));
-        int completed = 0;
+        std::vector<std::optional<AnalysisLine>> slots(
+            static_cast<std::size_t>(move_count));
+        std::atomic<int> next_move{0};
+        std::atomic<int> completed{0};
+        std::mutex publish_mutex;
+
+        auto collect_lines = [&]() {
+            std::vector<AnalysisLine> lines;
+            lines.reserve(static_cast<std::size_t>(move_count));
+            for (const auto& slot : slots) {
+                if (slot) lines.push_back(*slot);
+            }
+            return lines;
+        };
 
         auto publish = [&]() {
-            result = make_snapshot(iteration_lines, depth, completed,
-                                   completed == move_count);
+            std::lock_guard lock(publish_mutex);
+            iteration_lines = collect_lines();
+            result = make_snapshot(iteration_lines, depth,
+                completed.load(std::memory_order_relaxed),
+                completed.load(std::memory_order_relaxed) == move_count);
             if (callback) callback(result);
         };
-        heartbeat_ = publish;
-        next_heartbeat_ = std::chrono::steady_clock::now() +
-            std::chrono::milliseconds(200);
 
-        while (completed < move_count) {
-            if (should_stop()) break;
+        auto run_worker = [&](int worker_index) {
+            auto& worker = *workers[static_cast<std::size_t>(worker_index)];
+            auto publish_worker_stats = [&]() {
+                worker_nodes[static_cast<std::size_t>(worker_index)].store(
+                    worker.nodes_, std::memory_order_relaxed);
+                worker_qnodes[static_cast<std::size_t>(worker_index)].store(
+                    worker.quiescence_nodes_, std::memory_order_relaxed);
+                worker_tt_hits[static_cast<std::size_t>(worker_index)].store(
+                    worker.tt_hits_, std::memory_order_relaxed);
+                worker_seldepth[static_cast<std::size_t>(worker_index)].store(
+                    worker.selective_depth_, std::memory_order_relaxed);
+            };
+            worker.heartbeat_ = [&]() {
+                publish_worker_stats();
+                publish();
+            };
+            worker.next_heartbeat_ = std::chrono::steady_clock::now() +
+                std::chrono::milliseconds(200);
+            while (!stop_requested_.load(std::memory_order_relaxed)) {
+                const int move_index = next_move.fetch_add(
+                    1, std::memory_order_relaxed);
+                if (move_index >= move_count) break;
 
-            pv_length_.fill(0);
-            aborted_ = false;
-            const auto move = moves[completed];
-            current.make_move(move);
-            const Score score = -alpha_beta(current, depth - 1,
-                -SCORE_INFINITE, SCORE_INFINITE, 1, 0, nullptr);
-            current.undo_move(move);
-            if (aborted_) break;
+                worker.pv_length_.fill(0);
+                worker.aborted_ = false;
+                auto branch = position;
+                const auto move = moves[move_index];
+                branch.make_move(move);
+                const Score score = -worker.alpha_beta(branch, depth - 1,
+                    -SCORE_INFINITE, SCORE_INFINITE, 1, 0, nullptr);
 
-            AnalysisLine line;
-            line.move = move;
-            line.score = score;
-            line.depth = depth;
-            line.principal_variation.push_back(move);
-            const int child_length = pv_length_[1];
-            for (int index = 1; index < child_length; ++index) {
-                line.principal_variation.push_back(
-                    pv_table_[1][static_cast<std::size_t>(index)]);
+                publish_worker_stats();
+                if (worker.aborted_) break;
+
+                AnalysisLine line;
+                line.move = move;
+                line.score = score;
+                line.depth = depth;
+                line.principal_variation.push_back(move);
+                const int child_length = worker.pv_length_[1];
+                for (int index = 1; index < child_length; ++index) {
+                    line.principal_variation.push_back(
+                        worker.pv_table_[1][static_cast<std::size_t>(index)]);
+                }
+                {
+                    std::lock_guard lock(publish_mutex);
+                    slots[static_cast<std::size_t>(move_index)] =
+                        std::move(line);
+                    completed.fetch_add(1, std::memory_order_relaxed);
+                }
+                publish();
             }
-            iteration_lines.push_back(std::move(line));
-            ++completed;
-            publish();
-        }
+            worker.heartbeat_ = {};
+        };
 
-        if (completed == move_count) {
+        std::vector<std::thread> threads;
+        threads.reserve(static_cast<std::size_t>(worker_count));
+        for (int index = 0; index < worker_count; ++index) {
+            threads.emplace_back(run_worker, index);
+        }
+        for (auto& thread : threads) thread.join();
+
+        iteration_lines = collect_lines();
+        const int completed_count = completed.load(std::memory_order_relaxed);
+        if (completed_count == move_count) {
             previous_lines = iteration_lines;
-            result = make_snapshot(iteration_lines, depth, completed, true);
+            result = make_snapshot(iteration_lines, depth, completed_count, true);
         } else {
-            result = make_snapshot(iteration_lines, depth, completed, false);
+            result = make_snapshot(iteration_lines, depth, completed_count, false);
             if (callback) callback(result);
             break;
         }
         if (should_stop()) break;
     }
 
-    heartbeat_ = {};
+    owned_workers.clear();
+    if (worker_count > 1) table_.resize(hash_megabytes_);
+    external_stop_ = nullptr;
     return result;
 }
 

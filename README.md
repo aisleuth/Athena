@@ -59,11 +59,12 @@ node gui/server.mjs
 ```
 
 Then open [http://127.0.0.1:8787](http://127.0.0.1:8787). The GUI provides the
-full 14x14 cross board, click or drag movement with legal-move highlighting,
+full 14x14 cross board, two-click movement with legal-move highlighting,
 a best-move arrow, ranked candidate evaluations and principal variations,
 undo/reset controls, and adjustable depth, search time, MultiPV, hash size,
-and starting setup. Analysis automatically refreshes after a move by default;
-an optional setting lets Athena play one best response as well.
+analysis threads (one to four), and starting setup. Analysis automatically
+refreshes after a move by default; an optional setting lets Athena play one
+best response as well.
 
 Ranked analysis uses iterative deepening and updates the move list, ratings,
 principal variations, and best-move arrow while the search is running. A
@@ -72,6 +73,11 @@ passes until `Stop` is pressed. The progress meter shows exact root-move
 completion for the current depth pass and live node/time totals; it resets as
 the engine enters each deeper pass. Checks and captures are searched before
 quiet root moves.
+
+The `Threads` control parallelizes candidate root moves during ranked GUI
+analysis. One thread is the default for lower heat and power use; two to four
+threads can finish a depth pass faster on multi-core computers. The selected
+hash budget is divided across the analysis workers.
 
 Use `ATHENA_GUI_PORT` to select a different port or `ATHENA_ENGINE` to point at
 a non-default Athena executable.
@@ -98,7 +104,7 @@ option.
 |---------------|-----------------------------------------------------------------------------|
 | `uci`         | Identifies the engine and returns its name, version, and supported options. |
 | `isready`     | Checks if the engine is ready; responds with `readyok` when synchronized.   |
-| `setoption`   | Sets a configuration option such as `Setup` or `Hash`.                     |
+| `setoption`   | Sets a configuration option such as `Setup`, `Hash`, or `Threads`.          |
 | `ucinewgame`  | Notifies the engine that a new game is about to begin.                      |
 | `position`    | Sets `startpos` or a four-player FEN, optionally followed by legal moves.   |
 | `go`          | Starts an asynchronous search (`depth`, `movetime`, or `infinite`).          |
@@ -115,10 +121,11 @@ go depth 5
 
 ### UCI Options
 
-| Name    | Default  | Description                                                  |
-|---------|----------|--------------------------------------------------------------|
-| `Setup` | `modern` | Board setup variant to use (`modern` or `classic`).          |
-| `Hash`  | `16`     | Transposition-table size in MiB (`1` to `1024`).              |
+| Name      | Default  | Description                                                        |
+|-----------|----------|--------------------------------------------------------------------|
+| `Setup`   | `modern` | Board setup variant to use (`modern` or `classic`).                |
+| `Hash`    | `16`     | Transposition-table size in MiB (`1` to `1024`).                    |
+| `Threads` | `1`      | Root-analysis worker threads (`1` to `4`; ranked analysis only).    |
 
 ### Debug Commands
 
@@ -144,6 +151,7 @@ Athena also provides additional commands for testing and debugging:
 - Complete principal-variation output instead of only the root move
 - Zobrist-keyed transposition table with exact, lower, and upper bounds
 - Fixed-depth, fixed-movetime, infinite, and interruptible searches
+- Parallel ranked root analysis with one to four worker threads
 ### Evaluate
 - Team-aware material counting
 - Central piece activity
@@ -152,7 +160,7 @@ Athena also provides additional commands for testing and debugging:
 - Check pressure against either opposing king, including the opponent who moves later
 
 ### Current limitations
-- Single search thread
+- The standard `go` command is single-threaded; `Threads` applies to ranked analysis
 - Hand-tuned evaluation rather than a trained network
 - No built-in Chess.com connection (the local graphical interface is manual)
 - Team mode only; free-for-all scoring and elimination are not implemented

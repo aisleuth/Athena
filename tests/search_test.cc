@@ -353,6 +353,44 @@ TEST(SearchTest, RanksLegalRootMovesForGuiAnalysis) {
     }
 }
 
+TEST(SearchTest, ParallelRankedAnalysisMatchesSingleThreadedScores) {
+    const auto position = modern_start_position();
+    core::Search::Limits limits;
+    limits.depth = 2;
+
+    core::Search single_threaded;
+    single_threaded.set_threads(1);
+    single_threaded.reset();
+    const auto expected = single_threaded.analyze(position, limits, 64);
+
+    core::Search parallel;
+    parallel.set_threads(4);
+    parallel.reset();
+    const auto actual = parallel.analyze(position, limits, 64);
+
+    ASSERT_EQ(actual.lines.size(), expected.lines.size());
+    EXPECT_TRUE(actual.iteration_complete);
+    EXPECT_EQ(actual.root_moves_completed, actual.root_move_count);
+    EXPECT_GT(actual.nodes, 0U);
+    for (const auto& expected_line : expected.lines) {
+        const auto found = std::find_if(actual.lines.begin(), actual.lines.end(),
+            [&](const core::Search::AnalysisLine& line) {
+                return line.move == expected_line.move;
+            });
+        ASSERT_NE(found, actual.lines.end()) << expected_line.move.uci();
+        EXPECT_EQ(found->score, expected_line.score)
+            << expected_line.move.uci();
+    }
+}
+
+TEST(SearchTest, ThreadCountIsClampedToSupportedRange) {
+    core::Search search;
+    search.set_threads(0);
+    EXPECT_EQ(search.threads(), 1);
+    search.set_threads(8);
+    EXPECT_EQ(search.threads(), 4);
+}
+
 TEST(SearchTest, RankedAnalysisSearchesForcingRootMovesFirst) {
     const auto position = coordinated_mate_position();
     core::Search search;

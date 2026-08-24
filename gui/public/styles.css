@@ -99,11 +99,11 @@ button.accent { background: rgba(88,214,141,.14); color: #79e6a5; border-color: 
 .coord.rank { left: 4px; top: 2px; }
 .piece {
   position: relative; z-index: 4; line-height: .86; font-family: "Arial Unicode MS", "Noto Sans Symbols 2", Georgia, serif;
-  font-size: 6.25cqw; cursor: grab; transform: translateY(-1%);
+  font-size: 6.25cqw; cursor: pointer; transform: translateY(-1%);
   -webkit-text-stroke: clamp(.6px, .075vw, 1.15px) rgba(9,12,10,.78);
   filter: drop-shadow(0 2px 1px rgba(0,0,0,.28));
+  pointer-events: none;
 }
-.piece:active { cursor: grabbing; }
 .piece.r { color: var(--red); }
 .piece.b { color: var(--blue); }
 .piece.y { color: var(--yellow); }

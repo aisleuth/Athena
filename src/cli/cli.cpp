@@ -87,6 +87,7 @@ void CLI::uci(std::istream&) {
     std::cout << "id author " << misc::author() << "\n";
     std::cout << "option name Setup type combo default modern var modern var classic\n";
     std::cout << "option name Hash type spin default 16 min 1 max 1024\n";
+    std::cout << "option name Threads type spin default 1 min 1 max 4\n";
     std::cout << "uciok" << std::endl;
 }
 

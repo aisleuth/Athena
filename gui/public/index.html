@@ -30,7 +30,7 @@
       </div>
       <div class="board-caption">
         <span id="turnBadge" class="turn-badge red">Red to move</span>
-        <span id="boardHint">Click or drag a piece to make a legal move</span>
+        <span id="boardHint">Click a piece, then click a highlighted square</span>
       </div>
     </section>
 
@@ -42,6 +42,7 @@
           <label><span>Time <output id="timeValue">1000 ms</output></span><input id="moveTime" aria-label="Search time" type="range" min="0" max="10000" step="250" value="1000"></label>
           <label><span>Lines</span><select id="multipv"><option>3</option><option selected>8</option><option>12</option><option>20</option></select></label>
           <label><span>Hash</span><select id="hash"><option>16</option><option>32</option><option selected>64</option><option>128</option><option>256</option></select></label>
+          <label><span>Threads</span><select id="threads" aria-label="Analysis threads"><option selected>1</option><option>2</option><option>3</option><option>4</option></select></label>
           <label><span>Setup</span><select id="setup"><option value="modern">Modern</option><option value="classic">Classic</option></select></label>
         </div>
         <div class="toggle-row"><label class="switch-label"><input id="autoAnalyze" type="checkbox" checked><span>Analyze after each move</span></label><label class="switch-label"><input id="autoReply" type="checkbox"><span>Engine replies once</span></label></div>

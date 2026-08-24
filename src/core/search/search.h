@@ -15,6 +15,8 @@ namespace athena::core {
 
 class Search {
 public:
+    explicit Search(std::size_t hash_megabytes = 16);
+
     struct Limits {
         int depth = 4;
         std::chrono::milliseconds move_time{0};
@@ -60,7 +62,12 @@ public:
     void reset() noexcept;
     void stop() noexcept;
     void clear_hash() noexcept { table_.clear(); }
-    void resize_hash(std::size_t megabytes) { table_.resize(megabytes); }
+    void resize_hash(std::size_t megabytes) {
+        hash_megabytes_ = megabytes == 0 ? 1 : megabytes;
+        table_.resize(hash_megabytes_);
+    }
+    void set_threads(int threads) noexcept;
+    int threads() const noexcept { return threads_; }
     Result think(const chess::Position& position, const Limits& limits);
     AnalysisResult analyze(const chess::Position& position,
                            const Limits& limits, std::size_t max_lines,
@@ -76,8 +83,12 @@ private:
         const chess::Position& position, int max_plies) const;
     void update_principal_variation(int ply, chess::Move move) noexcept;
     bool should_stop() noexcept;
+    void prepare_worker(const Limits& limits,
+                        std::chrono::steady_clock::time_point started,
+                        const std::atomic_bool* external_stop) noexcept;
 
     std::atomic_bool stop_requested_{false};
+    const std::atomic_bool* external_stop_{nullptr};
     bool aborted_{false};
     bool has_deadline_{false};
     std::chrono::steady_clock::time_point deadline_{};
@@ -93,6 +104,8 @@ private:
     std::array<std::array<chess::Move, MAX_PV_PLY>, MAX_PV_PLY> pv_table_{};
     std::array<int, MAX_PV_PLY> pv_length_{};
     TranspositionTable table_;
+    std::size_t hash_megabytes_{16};
+    int threads_{1};
 };
 
 } // namespace athena

@@ -244,10 +244,21 @@ const server = createServer(async (request, response) => {
     }
     if (url.pathname === "/api/options" && request.method === "POST") {
       const body = await readJson(request);
-      const hash = Math.min(1024, Math.max(1, Number(body.hash) || 16));
+      const commands = [];
+      let hash;
+      let threads;
+      if (body.hash !== undefined) {
+        hash = Math.min(1024, Math.max(1, Number(body.hash) || 16));
+        commands.push(`setoption name Hash value ${hash}`);
+      }
+      if (body.threads !== undefined) {
+        threads = Math.min(4, Math.max(1, Number(body.threads) || 1));
+        commands.push(`setoption name Threads value ${threads}`);
+      }
+      if (!commands.length) return json(response, 400, { error: "No option supplied" });
       engine.interrupt();
-      await engine.request(`setoption name Hash value ${hash}\nstate`, "state end");
-      return json(response, 200, { ok: true, hash });
+      await engine.request(`${commands.join("\n")}\nstate`, "state end");
+      return json(response, 200, { ok: true, hash, threads });
     }
     if (url.pathname.startsWith("/api/")) return json(response, 404, { error: "Unknown endpoint" });
     return serveStatic(request, response);

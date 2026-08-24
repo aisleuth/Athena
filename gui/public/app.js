@@ -9,6 +9,7 @@ const glyphs = { K: "♚", Q: "♛", R: "♜", B: "♝", N: "♞", P: "♟" };
 const state = {
   position: null, selected: null, bestMove: null, variations: [], history: [],
   requestId: 0, analyzing: false, lastMove: null, analysisId: null,
+  movePending: false,
 };
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -78,6 +79,7 @@ function renderBoard() {
       const square = document.createElement("div");
       square.className = `square ${(row + file) % 2 ? "dark" : "light"}`;
       square.dataset.square = name;
+      square.dataset.piece = value ?? "";
       square.setAttribute("aria-label", name);
       if (value === "x") square.classList.add("stone");
       if (state.selected === name) square.classList.add("selected");
@@ -91,14 +93,7 @@ function renderBoard() {
         const piece = document.createElement("span");
         piece.className = `piece ${value[0]}`;
         piece.textContent = glyphs[value[1]] ?? value[1];
-        piece.draggable = true;
         piece.setAttribute("aria-label", `${colors[value[0]]} ${value[1]} on ${name}`);
-        piece.addEventListener("dragstart", (event) => {
-          if (!legalFrom(name).length) return event.preventDefault();
-          state.selected = name;
-          event.dataTransfer.setData("text/plain", name);
-          renderBoard();
-        });
         square.append(piece);
       }
       if (file === 0 || value !== "x" && file === 3) {
@@ -107,26 +102,42 @@ function renderBoard() {
       if (row === 13 || value !== "x" && row === 10) {
         const coord = document.createElement("span"); coord.className = "coord file"; coord.textContent = String.fromCharCode(97 + file); square.append(coord);
       }
-      square.addEventListener("click", () => handleSquareClick(name, value));
-      square.addEventListener("dragover", (event) => { if (state.selected && targets.includes(name)) event.preventDefault(); });
-      square.addEventListener("drop", (event) => {
-        event.preventDefault();
-        const from = event.dataTransfer.getData("text/plain") || state.selected;
-        chooseMove(from, name);
-      });
       boardElement.append(square);
     }
   }
   drawArrow(state.bestMove);
 }
 
+boardElement.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0) return;
+  const square = event.target.closest(".square");
+  if (!square || !boardElement.contains(square)) return;
+  event.preventDefault();
+  handleSquareClick(square.dataset.square, square.dataset.piece || null);
+});
+
 function handleSquareClick(square, value) {
+  if (state.movePending) return;
   if (state.selected) {
     if (chooseMove(state.selected, square)) return;
     state.selected = null;
   }
-  if (value && value !== "x" && legalFrom(square).length) state.selected = square;
+  if (value && value !== "x" && legalFrom(square).length) {
+    cancelAnalysisForBoardInput();
+    state.selected = square;
+  }
   renderBoard();
+}
+
+function cancelAnalysisForBoardInput() {
+  if (!state.analyzing) return;
+  ++state.requestId;
+  state.analyzing = false;
+  state.analysisId = null;
+  $("#analyzeButton").disabled = false;
+  $("#searchProgress").classList.remove("active");
+  setStatus("ready", "Choose a destination");
+  api("/api/stop", { method: "POST" }).catch((error) => toast(error.message));
 }
 
 function chooseMove(from, to) {
@@ -139,8 +150,27 @@ function chooseMove(from, to) {
     const promotion = (window.prompt("Promote to Q, R, B, or N", "Q") ?? "Q").toUpperCase();
     selected = choices.find((move) => splitMove(move).promotion === promotion) ?? choices[0];
   }
+  state.selected = null;
+  renderOptimisticMove(selected);
   playMove(selected, { userMove: true });
   return true;
+}
+
+function renderOptimisticMove(move) {
+  const parts = splitMove(move);
+  if (!parts) return;
+  const source = boardElement.querySelector(`[data-square="${parts.from}"]`);
+  const target = boardElement.querySelector(`[data-square="${parts.to}"]`);
+  const piece = source?.querySelector(".piece");
+  if (!source || !target || !piece) return;
+  target.querySelector(".piece")?.remove();
+  target.append(piece);
+  source.classList.remove("occupied", "selected");
+  target.classList.add("occupied", "last-to");
+  source.classList.add("last-from");
+  boardElement.querySelectorAll(".legal-target").forEach((square) => square.classList.remove("legal-target"));
+  state.lastMove = parts;
+  drawArrow(null);
 }
 
 function drawArrow(move) {
@@ -199,7 +229,7 @@ function renderAnalysis(result) {
   }
   const meta = result.stats;
   $("#analysisMeta").textContent = meta.nodes === undefined ? "Waiting for results" : `${meta.nodes.toLocaleString()} nodes · ${meta.timeMs} ms · sd ${meta.selectiveDepth}`;
-  renderBoard();
+  drawArrow(state.bestMove);
 }
 
 function renderProgress(result, active = true) {
@@ -213,7 +243,7 @@ function renderProgress(result, active = true) {
   $("#progressPhase").textContent = !active
     ? progress.iterationComplete ? `Depth ${progress.depth} complete` : `Stopped at depth ${progress.depth}`
     : progress.depth
-      ? `Depth ${progress.depth} · move ${Math.min(completed + (completed < total ? 1 : 0), total)}/${total}`
+      ? `Depth ${progress.depth} · ${completed}/${total} root moves complete`
       : "Preparing depth 1";
   const nodes = result.stats?.nodes ?? 0;
   const time = result.stats?.timeMs ?? 0;
@@ -282,7 +312,8 @@ async function stopAnalysis() {
 }
 
 async function playMove(move, { userMove = false, analyzeAfter = true } = {}) {
-  if (!move) return;
+  if (!move || state.movePending) return;
+  state.movePending = true;
   ++state.requestId;
   state.analyzing = false;
   state.analysisId = null;
@@ -296,11 +327,15 @@ async function playMove(move, { userMove = false, analyzeAfter = true } = {}) {
     state.variations = [];
     renderHistory();
     updatePosition(position);
+    state.movePending = false;
     if (analyzeAfter && $("#autoAnalyze").checked) {
       await analyzePosition({ playResponse: userMove });
     } else setStatus("ready", "Ready");
   } catch (error) {
     setStatus("error", "Move rejected"); toast(error.message);
+    if (state.position) renderBoard();
+  } finally {
+    state.movePending = false;
   }
 }
 
@@ -344,6 +379,10 @@ $("#setup").addEventListener("change", resetBoard);
 $("#hash").addEventListener("change", async (event) => {
   await api("/api/options", { method: "POST", body: JSON.stringify({ hash: Number(event.target.value) }) });
   toast(`Hash resized to ${event.target.value} MiB`);
+});
+$("#threads").addEventListener("change", async (event) => {
+  await api("/api/options", { method: "POST", body: JSON.stringify({ threads: Number(event.target.value) }) });
+  toast(`Analysis will use ${event.target.value} thread${event.target.value === "1" ? "" : "s"}`);
 });
 window.addEventListener("keydown", (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") { event.preventDefault(); undoMove(); }
