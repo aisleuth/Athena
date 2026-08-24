@@ -5,11 +5,12 @@ const analysisList = $("#analysisList");
 const historyElement = $("#moveHistory");
 
 const colors = { r: "Red", b: "Blue", y: "Yellow", g: "Green" };
+const teams = { r: "Red team", y: "Red team", b: "Blue team", g: "Blue team" };
 const glyphs = { K: "♚", Q: "♛", R: "♜", B: "♝", N: "♞", P: "♟" };
 const state = {
   position: null, selected: null, bestMove: null, variations: [], history: [],
   requestId: 0, analyzing: false, lastMove: null, analysisId: null,
-  movePending: false,
+  movePending: false, orientation: 0,
 };
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -64,6 +65,43 @@ function squareName(fileIndex, rowIndex) {
   return `${String.fromCharCode(97 + fileIndex)}${14 - rowIndex}`;
 }
 
+function viewToBoard(row, file) {
+  switch (state.orientation) {
+    case 1: return { row: 13 - file, file: row };
+    case 2: return { row: 13 - row, file: 13 - file };
+    case 3: return { row: file, file: 13 - row };
+    default: return { row, file };
+  }
+}
+
+function boardToView(row, file) {
+  switch (state.orientation) {
+    case 1: return { row: file, file: 13 - row };
+    case 2: return { row: 13 - row, file: 13 - file };
+    case 3: return { row: 13 - file, file: row };
+    default: return { row, file };
+  }
+}
+
+function renderPerspective() {
+  const positions = ["top", "right", "bottom", "left"];
+  const seatedColors = ["y", "g", "r", "b"];
+  const displayed = Array(4);
+  seatedColors.forEach((color, index) => {
+    displayed[(index + state.orientation) % 4] = color;
+  });
+  positions.forEach((position, index) => {
+    const color = displayed[index];
+    const tag = $(`#${position}Player`);
+    tag.className = `player-tag ${position} ${color}`;
+    tag.innerHTML = `<span>${colors[color]}</span><small>${teams[color]}</small>`;
+  });
+  const bottomColor = displayed[2];
+  $("#boardHint").textContent = `${colors[bottomColor]} perspective · Click a piece, then a highlighted square`;
+  $("#rotateBoardButton").setAttribute(
+    "aria-label", `Rotate board 90 degrees clockwise; ${colors[displayed[1]]} will be at the bottom`);
+}
+
 function legalFrom(square) {
   return (state.position?.legalMoves ?? []).filter((move) => splitMove(move)?.from === square);
 }
@@ -72,8 +110,9 @@ function renderBoard() {
   if (!state.position) return;
   const cells = parseBoard(state.position.fen);
   boardElement.replaceChildren();
-  for (let row = 0; row < 14; row += 1) {
-    for (let file = 0; file < 14; file += 1) {
+  for (let viewRow = 0; viewRow < 14; viewRow += 1) {
+    for (let viewFile = 0; viewFile < 14; viewFile += 1) {
+      const { row, file } = viewToBoard(viewRow, viewFile);
       const name = squareName(file, row);
       const value = cells[row]?.[file] ?? null;
       const square = document.createElement("div");
@@ -96,15 +135,22 @@ function renderBoard() {
         piece.setAttribute("aria-label", `${colors[value[0]]} ${value[1]} on ${name}`);
         square.append(piece);
       }
-      if (file === 0 || value !== "x" && file === 3) {
-        const rank = document.createElement("span"); rank.className = "coord rank"; rank.textContent = 14 - row; square.append(rank);
+      if (viewFile === 0 || value !== "x" && viewFile === 3) {
+        const sideCoordinate = document.createElement("span");
+        sideCoordinate.className = "coord rank";
+        sideCoordinate.textContent = state.orientation % 2 ? name[0] : name.match(/\d+$/)[0];
+        square.append(sideCoordinate);
       }
-      if (row === 13 || value !== "x" && row === 10) {
-        const coord = document.createElement("span"); coord.className = "coord file"; coord.textContent = String.fromCharCode(97 + file); square.append(coord);
+      if (viewRow === 13 || value !== "x" && viewRow === 10) {
+        const bottomCoordinate = document.createElement("span");
+        bottomCoordinate.className = "coord file";
+        bottomCoordinate.textContent = state.orientation % 2 ? name.match(/\d+$/)[0] : name[0];
+        square.append(bottomCoordinate);
       }
       boardElement.append(square);
     }
   }
+  renderPerspective();
   drawArrow(state.bestMove);
 }
 
@@ -178,7 +224,10 @@ function drawArrow(move) {
   if (!parts) { arrow.style.display = "none"; return; }
   const point = (square) => {
     const match = square.match(/^([a-n])(\d+)$/);
-    return { x: match[1].charCodeAt(0) - 96 - .5, y: 14 - Number(match[2]) + .5 };
+    const file = match[1].charCodeAt(0) - 97;
+    const row = 14 - Number(match[2]);
+    const view = boardToView(row, file);
+    return { x: view.file + .5, y: view.row + .5 };
   };
   const from = point(parts.from); const to = point(parts.to);
   const dx = to.x - from.x; const dy = to.y - from.y;
@@ -374,6 +423,10 @@ $("#analyzeButton").addEventListener("click", () => analyzePosition());
 $("#stopButton").addEventListener("click", stopAnalysis);
 $("#undoButton").addEventListener("click", undoMove);
 $("#resetButton").addEventListener("click", resetBoard);
+$("#rotateBoardButton").addEventListener("click", () => {
+  state.orientation = (state.orientation + 1) % 4;
+  renderBoard();
+});
 $("#playBestButton").addEventListener("click", () => playMove(state.bestMove, { userMove: false }));
 $("#setup").addEventListener("change", resetBoard);
 $("#hash").addEventListener("change", async (event) => {

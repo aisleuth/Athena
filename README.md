@@ -61,7 +61,7 @@ node gui/server.mjs
 Then open [http://127.0.0.1:8787](http://127.0.0.1:8787). The GUI provides the
 full 14x14 cross board, two-click movement with legal-move highlighting,
 a best-move arrow, ranked candidate evaluations and principal variations,
-undo/reset controls, and adjustable depth, search time, MultiPV, hash size,
+undo/reset/90-degree rotation controls, and adjustable depth, search time, MultiPV, hash size,
 analysis threads (one to four), and starting setup. Analysis automatically
 refreshes after a move by default; an optional setting lets Athena play one
 best response as well.

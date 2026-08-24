@@ -118,10 +118,14 @@ button.accent { background: rgba(88,214,141,.14); color: #79e6a5; border-color: 
 }
 .player-tag::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: currentColor; }
 .player-tag small { color: var(--muted); font-size: 10px; font-weight: 500; }
-.player-tag.yellow { color: var(--yellow); top: 6px; left: 50%; transform: translateX(-50%); }
-.player-tag.red { color: var(--red); bottom: -15px; left: 50%; transform: translateX(-50%); }
-.player-tag.blue { color: var(--blue); left: 1px; top: 50%; transform: rotate(-90deg) translateX(-50%); transform-origin: left top; }
-.player-tag.green { color: #58b77a; right: 0; top: 50%; transform: rotate(90deg) translateX(50%); transform-origin: right top; }
+.player-tag.r { color: var(--red); }
+.player-tag.b { color: var(--blue); }
+.player-tag.y { color: var(--yellow); }
+.player-tag.g { color: #58b77a; }
+.player-tag.top { top: 6px; left: 50%; transform: translateX(-50%); }
+.player-tag.bottom { bottom: -15px; left: 50%; transform: translateX(-50%); }
+.player-tag.left { left: 1px; top: 50%; transform: rotate(-90deg) translateX(-50%); transform-origin: left top; }
+.player-tag.right { right: 0; top: 50%; transform: rotate(90deg) translateX(50%); transform-origin: right top; }
 .board-caption { margin-top: 24px; display: flex; justify-content: center; align-items: center; gap: 14px; color: var(--muted); font-size: 12px; }
 .turn-badge { color: #111; padding: 5px 9px; border-radius: 999px; font-size: 11px; font-weight: 800; }
 .turn-badge.red, .turn-badge.r { background: var(--red); }.turn-badge.blue, .turn-badge.b { background: var(--blue); }.turn-badge.yellow, .turn-badge.y { background: var(--yellow); }.turn-badge.green, .turn-badge.g { background: #58b77a; }

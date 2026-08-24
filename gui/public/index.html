@@ -17,10 +17,10 @@
 
   <main class="workspace">
     <section class="board-panel">
-      <div class="player-tag yellow"><span>Yellow</span><small>Red team</small></div>
-      <div class="player-tag blue"><span>Blue</span><small>Blue team</small></div>
-      <div class="player-tag green"><span>Green</span><small>Blue team</small></div>
-      <div class="player-tag red"><span>Red</span><small>Red team</small></div>
+      <div id="topPlayer" class="player-tag top"></div>
+      <div id="leftPlayer" class="player-tag left"></div>
+      <div id="rightPlayer" class="player-tag right"></div>
+      <div id="bottomPlayer" class="player-tag bottom"></div>
       <div id="boardShell" class="board-shell">
         <div id="board" class="board" aria-label="Four-player chess board"></div>
         <svg id="arrowLayer" class="arrow-layer" viewBox="0 0 14 14" preserveAspectRatio="none" aria-hidden="true">
@@ -51,7 +51,7 @@
           <div class="progress-track"><span id="progressFill"></span></div>
           <div id="progressDetail" class="progress-detail">Progress is measured across root moves at the current depth.</div>
         </div>
-        <div class="button-row"><button id="stopButton">Stop</button><button id="undoButton">Undo</button><button id="resetButton">Reset board</button><button id="playBestButton" class="accent" disabled>Play best</button></div>
+        <div class="button-row"><button id="stopButton">Stop</button><button id="undoButton">Undo</button><button id="resetButton">Reset board</button><button id="rotateBoardButton" title="Rotate the board 90 degrees clockwise">↻ Rotate board</button><button id="playBestButton" class="accent" disabled>Play best</button></div>
       </section>
 
       <section class="card analysis-card">
