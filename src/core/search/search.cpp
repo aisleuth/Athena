@@ -479,8 +479,12 @@ Search::AnalysisResult Search::analyze(const chess::Position& position,
                 branch.make_move(move);
                 const Score score = -worker.alpha_beta(branch, depth - 1,
                     -SCORE_INFINITE, SCORE_INFINITE, 1, 0, nullptr);
-                const auto cached_variation =
-                    worker.extract_principal_variation(branch, depth - 1);
+                const int child_length = worker.pv_length_[1];
+                std::vector<chess::Move> cached_variation;
+                if (child_length <= 1) {
+                    cached_variation =
+                        worker.extract_principal_variation(branch, depth - 1);
+                }
                 branch.undo_move(move);
 
                 publish_worker_stats();
@@ -491,7 +495,6 @@ Search::AnalysisResult Search::analyze(const chess::Position& position,
                 line.score = score;
                 line.depth = depth;
                 line.principal_variation.push_back(move);
-                const int child_length = worker.pv_length_[1];
                 for (int index = 1; index < child_length; ++index) {
                     line.principal_variation.push_back(
                         worker.pv_table_[1][static_cast<std::size_t>(index)]);
