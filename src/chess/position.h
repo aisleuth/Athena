@@ -6,6 +6,7 @@
 #include "bitboard.h"
 #include "square.h"
 #include "castle.h"
+#include <array>
 #include "psqt.h"
 #include "zobrist.h"
 #include <cstdint>
@@ -83,8 +84,41 @@ public:
     // leaves standing, discovered checks, promotions, en passant, castling.
     bool would_check(Move move, Color::ID king_color) const noexcept;
 
+    // Precomputed per-node data for answering "does this move check `king`?"
+    // without touching the board. Built once per node by init_check_info and
+    // consumed by gives_check for every move at that node.
+    struct CheckInfo {
+        // Uninitialised by design: init_check_info writes discovery
+        // unconditionally and check_squares whenever usable is set.
+        std::array<Bitboard, PIECE_NB> check_squares;
+        Bitboard discovery;     // side-to-move pieces that may discover check
+        Square king{};
+        Color::ID king_color{Color::ID::None};
+        bool usable{false};     // false => caller must use would_check
+    };
+
+    void init_check_info(Color::ID king_color, CheckInfo& info) const noexcept;
+
+    // Exactly equivalent to would_check(move, info.king_color), but O(1) in
+    // bitboard ops for the common move policies. Falls back to would_check
+    // for castling, en passant, and promotions.
+    bool gives_check(Move move, const CheckInfo& info) const noexcept;
+
+    // Check status is queried repeatedly for the same position: once by the
+    // search, four times by evaluate's check-pressure term, and once per
+    // opposing king by init_check_info. Memoise against the incremental
+    // Zobrist key, which every board mutation already updates -- that makes
+    // the cache self-invalidating with no work in make_move/undo_move.
     bool in_check(Color::ID color) const noexcept {
-        return attacked(royal(color), Color(color), occupied());
+        if (check_cache_key_ != key_) {
+            check_cache_key_ = key_;
+            check_cache_.fill(-1);
+        }
+        auto& slot = check_cache_[static_cast<uint8_t>(color)];
+        if (slot < 0) {
+            slot = attacked(royal(color), Color(color), occupied()) ? 1 : 0;
+        }
+        return slot != 0;
     }
 
     bool in_check() const noexcept { return in_check(turn_.id()); }
@@ -118,6 +152,8 @@ private:
     std::array<Square, COLOR_NB> royal_;
     std::array<zobrist::Key, PLAY_NB> key_history_{};
     std::array<psqt::Value, COLOR_NB + 1> psq_{}; // +1: None slot absorbs stray writes
+    mutable zobrist::Key check_cache_key_{~zobrist::Key{0}};
+    mutable std::array<std::int8_t, COLOR_NB> check_cache_{-1, -1, -1, -1};
     zobrist::Key key_{0};
     Depth play_{0};
     Color turn_{Color::ID::Red};

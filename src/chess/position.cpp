@@ -232,18 +232,25 @@ bool Position::attacked(Square sq, Color color, const Bitboard& occupied,
     if ((get_crawl_attacks<Piece::ID::King>(sq) &
          bitboard(Piece::ID::King) & enemy).any()) return true;
 
-    // Sliding scans are the expensive part; only run them when an enemy
-    // slider sits on one of sq's lines of an empty board.
-    const auto diagonal = get_slide_attacks<Piece::ID::Bishop>(sq) &
+    // Sliders: rather than building sq's full occupancy-aware attack set,
+    // walk the few enemy sliders that lie on one of sq's empty-board lines
+    // and test each for a clear path. Building the attack set costs a full
+    // hyperbola-quintessence pass over all four bitboard chunks, while each
+    // candidate here is one precomputed mask, an AND, and a zero test --
+    // and there is rarely more than one candidate.
+    auto diagonal = get_slide_attacks<Piece::ID::Bishop>(sq) &
         (bitboard(Piece::ID::Bishop) | bitboard(Piece::ID::Queen)) & enemy;
-    if (diagonal.any() &&
-        (get_slide_attacks<Piece::ID::Bishop>(sq, occupied) & diagonal).any()) {
-        return true;
+    while (diagonal.any()) {
+        const auto from = Bitboard::pop_lsb(diagonal);
+        if ((get_line_between_mask(from, sq) & occupied).empty()) return true;
     }
-    const auto straight = get_slide_attacks<Piece::ID::Rook>(sq) &
+    auto straight = get_slide_attacks<Piece::ID::Rook>(sq) &
         (bitboard(Piece::ID::Rook) | bitboard(Piece::ID::Queen)) & enemy;
-    return straight.any() &&
-        (get_slide_attacks<Piece::ID::Rook>(sq, occupied) & straight).any();
+    while (straight.any()) {
+        const auto from = Bitboard::pop_lsb(straight);
+        if ((get_line_between_mask(from, sq) & occupied).empty()) return true;
+    }
+    return false;
 }
 
 bool Position::would_check(Move move, Color::ID king_color) const noexcept {
@@ -325,6 +332,79 @@ bool Position::would_check(Move move, Color::ID king_color) const noexcept {
     exclude.set_bit(source);
     if (policy == Move::Policy::Castle) exclude.set_bit(rook_source);
     return attacked(king, Color(king_color), occ, exclude);
+}
+
+void Position::init_check_info(Color::ID king_color,
+                               CheckInfo& info) const noexcept {
+    info.king_color = king_color;
+    info.king = royal(king_color);
+    info.discovery = Bitboard{};
+
+    // The fast path only reasons about attacks the move *creates*. When the
+    // king already stands in check, a move can also leave a pre-existing
+    // check standing or block it, so the caller must use would_check instead.
+    info.usable = !in_check(king_color);
+    if (!info.usable) return;
+
+    const auto ksq = info.king;
+    const auto occ = occupied();
+
+    // Squares from which each piece type would attack ksq. Computed against
+    // the current occupancy: for a capture the captured square is the first
+    // blocker on its ray and so is already included.
+    const auto diagonal = get_slide_attacks<Piece::ID::Bishop>(ksq, occ);
+    const auto straight = get_slide_attacks<Piece::ID::Rook>(ksq, occ);
+    info.check_squares[static_cast<std::size_t>(Piece::ID::Knight)] =
+        get_crawl_attacks<Piece::ID::Knight>(ksq);
+    info.check_squares[static_cast<std::size_t>(Piece::ID::King)] =
+        get_crawl_attacks<Piece::ID::King>(ksq);
+    info.check_squares[static_cast<std::size_t>(Piece::ID::Bishop)] = diagonal;
+    info.check_squares[static_cast<std::size_t>(Piece::ID::Rook)] = straight;
+    info.check_squares[static_cast<std::size_t>(Piece::ID::Queen)] =
+        diagonal | straight;
+    // Reverse pawn attack: a pawn of the moving colour on `sq` attacks ksq
+    // exactly when sq lies in the ally-oriented pawn table around ksq.
+    info.check_squares[static_cast<std::size_t>(Piece::ID::Pawn)] =
+        get_pawn_attacks(ksq, turn_.ally().id());
+
+    // Discovery candidates: pieces of the side to move that are the single
+    // occupant between ksq and one of our team's sliders.
+    const auto team = bitboard(turn_.id()) | bitboard(turn_.ally().id());
+    auto sliders =
+        (get_slide_attacks<Piece::ID::Bishop>(ksq) &
+            (bitboard(Piece::ID::Bishop) | bitboard(Piece::ID::Queen))) |
+        (get_slide_attacks<Piece::ID::Rook>(ksq) &
+            (bitboard(Piece::ID::Rook) | bitboard(Piece::ID::Queen)));
+    sliders &= team;
+    while (sliders.any()) {
+        const auto from = Bitboard::pop_lsb(sliders);
+        const auto between = get_line_between_mask(from, ksq) & occ;
+        if (between.count() == 1) info.discovery |= between;
+    }
+    // Only the side to move can move its own pieces.
+    info.discovery &= bitboard(turn_.id());
+}
+
+bool Position::gives_check(Move move, const CheckInfo& info) const noexcept {
+    const auto policy = move.policy();
+    if (!info.usable ||
+        (policy != Move::Policy::Normal && policy != Move::Policy::Stride)) {
+        // Castling moves a rook as well, en passant vacates a second square,
+        // and promotions change the piece type; all are rare enough to defer
+        // to the exact make/unmake-free reference implementation.
+        return would_check(move, info.king_color);
+    }
+
+    const auto target = Square(move.target());
+    const auto piece = board(move.source()).piece().id();
+    if (info.check_squares[static_cast<std::size_t>(piece)].has_bit(target)) {
+        return true;
+    }
+
+    const auto source = Square(move.source());
+    if (!info.discovery.has_bit(source)) return false;
+    // The piece uncovers the slider unless it stays on the same line.
+    return !get_line_through_mask(source, info.king).has_bit(target);
 }
 
 bool Position::is_repetition(int required_occurrences) const noexcept {

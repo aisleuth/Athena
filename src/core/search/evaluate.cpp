@@ -117,15 +117,22 @@ Score evaluate(const chess::Position& pos) noexcept {
     Score score = pos.psq(perspective.id()) + pos.psq(perspective.ally().id())
         - pos.psq(perspective.next().id()) - pos.psq(perspective.prev().id());
 
+    // Teams are the even and odd colours (Red+Yellow, Blue+Green), so the two
+    // team masks and the pawn mask are shared across the four kings instead of
+    // being rebuilt per colour.
+    const auto& pawns = pos.bitboard(chess::Piece::ID::Pawn);
+    const chess::Bitboard team_mask[2] = {
+        pos.bitboard(chess::Color::ID::Red) | pos.bitboard(chess::Color::ID::Yellow),
+        pos.bitboard(chess::Color::ID::Blue) | pos.bitboard(chess::Color::ID::Green),
+    };
+
     for (int color_index = 0; color_index < chess::COLOR_NB; ++color_index) {
         const auto color = static_cast<chess::Color::ID>(color_index);
         const Score sign = perspective.same(color) ? 1 : -1;
 
         // Pawns belonging to either teammate help shelter this king.
-        const auto ally = chess::Color(color).ally().id();
-        const auto team = pos.bitboard(color) | pos.bitboard(ally);
         const auto shield = chess::get_crawl_attacks<chess::Piece::ID::King>(
-            pos.royal(color)) & pos.bitboard(chess::Piece::ID::Pawn) & team;
+            pos.royal(color)) & pawns & team_mask[color_index & 1];
         score += sign * 15 * shield.count();
 
         if (pos.in_check(color)) score -= sign * CHECK_PRESSURE;

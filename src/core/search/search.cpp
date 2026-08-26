@@ -55,15 +55,23 @@ Score tactical_gain(const chess::Position& position,
     return gain;
 }
 
+struct OpponentChecks {
+    chess::Position::CheckInfo next;
+    chess::Position::CheckInfo prev;
+};
+
+void init_opponent_checks(const chess::Position& position,
+                          OpponentChecks& info) noexcept {
+    position.init_check_info(position.turn().next().id(), info.next);
+    position.init_check_info(position.turn().prev().id(), info.prev);
+}
+
 std::uint8_t check_targets_after_move(const chess::Position& position,
+                                      const OpponentChecks& info,
                                       chess::Move move) noexcept {
     std::uint8_t targets = NoCheck;
-    if (position.would_check(move, position.turn().next().id())) {
-        targets |= ImmediateOpponent;
-    }
-    if (position.would_check(move, position.turn().prev().id())) {
-        targets |= OtherOpponent;
-    }
+    if (position.gives_check(move, info.next)) targets |= ImmediateOpponent;
+    if (position.gives_check(move, info.prev)) targets |= OtherOpponent;
     return targets;
 }
 
@@ -105,21 +113,31 @@ void order_moves(chess::Position& position, chess::Move* moves, int move_count,
     struct ScoredMove {
         chess::Move move;
         int score;
+        int index;      // preserves stable order under a non-allocating sort
     };
 
-    std::array<ScoredMove, chess::MOVE_NB> scored{};
+    OpponentChecks check_info;
+    if (detect_checks) init_opponent_checks(position, check_info);
+
+    // Deliberately left uninitialised: entries [0, move_count) are written
+    // before they are read, and value-initialising the full array memset
+    // several kilobytes at every node.
+    std::array<ScoredMove, chess::MOVE_NB> scored;
     for (int i = 0; i < move_count; ++i) {
         const std::uint8_t checks = detect_checks
-            ? check_targets_after_move(position, moves[i])
+            ? check_targets_after_move(position, check_info, moves[i])
             : static_cast<std::uint8_t>(NoCheck);
         scored[static_cast<std::size_t>(i)] = {
             moves[i], move_order_score(position, moves[i], table_move, checks,
-                                       killers, history)};
+                                       killers, history), i};
     }
 
-    std::stable_sort(scored.begin(), scored.begin() + move_count,
+    // std::stable_sort allocates a scratch buffer on every call; ordering by
+    // (score, original index) reproduces stable order exactly without one.
+    std::sort(scored.begin(), scored.begin() + move_count,
         [](const ScoredMove& lhs, const ScoredMove& rhs) {
-            return lhs.score > rhs.score;
+            if (lhs.score != rhs.score) return lhs.score > rhs.score;
+            return lhs.index < rhs.index;
         });
     for (int i = 0; i < move_count; ++i) {
         moves[i] = scored[static_cast<std::size_t>(i)].move;
@@ -748,13 +766,14 @@ Score Search::quiescence(chess::Position& position, Score alpha, Score beta,
             // Quiet checks are still candidates: generate everything and
             // keep captures, promotions, and checking quiet moves.
             move_count = chess::generate_legal_moves(position, moves);
+            chess::Position::CheckInfo immediate;
+            position.init_check_info(position.turn().next().id(), immediate);
             int forcing_count = 0;
             for (int i = 0; i < move_count; ++i) {
                 const auto move = moves[i];
                 bool include = is_noisy(position, move);
                 if (!include) {
-                    include = position.would_check(
-                        move, position.turn().next().id());
+                    include = position.gives_check(move, immediate);
                     if (include) ++quiescence_checks_;
                 }
                 if (include) moves[forcing_count++] = move;
@@ -771,16 +790,24 @@ Score Search::quiescence(chess::Position& position, Score alpha, Score beta,
 
     order_moves(position, moves, move_count, table_move, false);
 
+    OpponentChecks delta_info;
+    bool delta_info_ready = false;
+
     chess::Move best_move;
     for (int i = 0; i < move_count; ++i) {
         const auto move = moves[i];
         const bool delta_candidate = !in_check &&
             move.policy() != chess::Move::Policy::Evolve &&
             stand_pat + tactical_gain(position, move) + DELTA_MARGIN < alpha;
-        if (delta_candidate &&
-            !position.would_check(move, position.turn().next().id()) &&
-            !position.would_check(move, position.turn().prev().id())) {
-            continue;
+        if (delta_candidate) {
+            if (!delta_info_ready) {
+                init_opponent_checks(position, delta_info);
+                delta_info_ready = true;
+            }
+            if (!position.gives_check(move, delta_info.next) &&
+                !position.gives_check(move, delta_info.prev)) {
+                continue;
+            }
         }
         position.make_move(move);
         const Score score = -quiescence(position, -beta, -alpha, ply + 1,

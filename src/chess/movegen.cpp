@@ -150,7 +150,9 @@ Move* add_royal_moves(const Position& pos, Move* moves, Square source, Bitboard&
 
         auto occ = pos.occupied();
         occ.pop_bit(source);
-        if (pos.get_attackers_bitboard(target, pos.turn().id(), occ).any())
+        // Only "is this square attacked?" is needed, so use the early-exit
+        // predicate rather than materialising the whole attacker set.
+        if (pos.attacked(target, pos.turn().id(), occ))
             continue;
 
         *(moves++) = Move(source.id(), target.id(), Piece::ID::Empty, Color::ID::None, Castle::Side(0b10), Move::Policy::Normal);

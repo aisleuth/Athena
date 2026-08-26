@@ -254,6 +254,86 @@ TEST(EvaluateTest, RewardsCentralPieceActivity) {
     EXPECT_GT(core::evaluate_positional(position), baseline);
 }
 
+namespace {
+
+// Walks the tree and asserts the O(1) gives_check fast path agrees with
+// actually playing the move, for both opposing kings at every node.
+void VerifyGivesCheck(chess::Position& position, int depth,
+                      long long& tested, long long& fast) {
+    chess::Move moves[chess::MOVE_NB];
+    const int move_count = chess::generate_legal_moves(position, moves);
+
+    for (int which = 0; which < 2; ++which) {
+        const auto king_color = which ? position.turn().prev().id()
+                                      : position.turn().next().id();
+        chess::Position::CheckInfo info;
+        position.init_check_info(king_color, info);
+
+        for (int index = 0; index < move_count; ++index) {
+            const auto move = moves[index];
+            const bool predicted = position.gives_check(move, info);
+            position.make_move(move);
+            const bool actual = position.in_check(king_color);
+            position.undo_move(move);
+
+            ++tested;
+            if (info.usable &&
+                (move.policy() == chess::Move::Policy::Normal ||
+                 move.policy() == chess::Move::Policy::Stride)) {
+                ++fast;
+            }
+            ASSERT_EQ(predicted, actual)
+                << "gives_check disagreed for " << move.uci()
+                << " against king " << static_cast<int>(king_color)
+                << " in " << position.fen();
+        }
+    }
+
+    if (depth == 0) return;
+    for (int index = 0; index < move_count; ++index) {
+        position.make_move(moves[index]);
+        VerifyGivesCheck(position, depth - 1, tested, fast);
+        position.undo_move(moves[index]);
+    }
+}
+
+} // namespace
+
+TEST(PositionTest, GivesCheckMatchesPlayingTheMove) {
+    chess::Position position;
+    position.init(chess::Position::startpos(chess::Castle::Setup::Modern));
+
+    long long tested = 0;
+    long long fast = 0;
+    VerifyGivesCheck(position, 2, tested, fast);
+
+    EXPECT_GT(tested, 10'000);
+    // The fast path must actually be carrying the traffic, not silently
+    // degrading into the would_check fallback for everything.
+    EXPECT_GT(fast, tested * 9 / 10);
+}
+
+TEST(PositionTest, GivesCheckHandlesCastlingAndPromotion) {
+    // Castling, en passant, and promotions take the would_check fallback;
+    // this pins that the fallback is wired up and still exact.
+    chess::Position position;
+    position.init(
+        "R-0,0,0,0-1,1,1,1-1,1,1,1-0,0,0,0-0-"
+        "x,x,x,yR,2,yK,3,yR,x,x,x/"
+        "x,x,x,yP,yP,yP,yP,yP,yP,yP,yP,x,x,x/"
+        "x,x,x,8,x,x,x/"
+        "bR,bP,10,gP,gR/1,bP,10,gP,1/1,bP,10,gP,1/1,bP,10,gP,gK/"
+        "bK,bP,10,gP,1/1,bP,10,gP,1/1,bP,10,gP,1/bR,bP,10,gP,gR/"
+        "x,x,x,8,x,x,x/"
+        "x,x,x,rP,rP,rP,rP,rP,rP,rP,rP,x,x,x/"
+        "x,x,x,rR,3,rK,2,rR,x,x,x");
+
+    long long tested = 0;
+    long long fast = 0;
+    VerifyGivesCheck(position, 1, tested, fast);
+    EXPECT_GT(tested, 1'000);
+}
+
 TEST(PositionTest, KingMayNotStepIntoAPawnAttack) {
     // Regression: get_pawn_attacks used to swap the Blue and Yellow attack
     // patterns, making checks by red and green pawns invisible. A green king
