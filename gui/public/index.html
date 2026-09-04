@@ -46,6 +46,11 @@
           <label><span>Setup</span><select id="setup"><option value="modern">Modern</option><option value="classic">Classic</option></select></label>
         </div>
         <div class="toggle-row"><label class="switch-label"><input id="autoAnalyze" type="checkbox" checked><span>Analyze after each move</span></label><label class="switch-label"><input id="autoReply" type="checkbox"><span>Engine replies once</span></label></div>
+        <div id="practiceControls" class="practice-controls">
+          <label class="switch-label practice-toggle"><input id="practiceMode" type="checkbox"><span>Practice mode</span></label>
+          <label class="practice-team"><span>Practice as</span><select id="practiceTeam" aria-label="Practice team"><option value="ry">Red + Yellow</option><option value="bg">Blue + Green</option></select></label>
+          <p id="practiceNote">Your team's candidate moves stay hidden until after you commit a move.</p>
+        </div>
         <div id="searchProgress" class="search-progress" aria-live="polite">
           <div class="progress-label"><span id="progressPhase">Waiting to search</span><span id="progressPercent">0%</span></div>
           <div class="progress-track"><span id="progressFill"></span></div>
@@ -55,7 +60,7 @@
       </section>
 
       <section class="card analysis-card">
-        <div class="analysis-header"><div><span class="eyebrow">Ranked choices</span><h2>Candidate moves</h2></div><div id="analysisMeta" class="analysis-meta">No analysis yet</div></div>
+        <div class="analysis-header"><div><span id="analysisEyebrow" class="eyebrow">Ranked choices</span><h2 id="analysisTitle">Candidate moves</h2></div><div class="analysis-actions"><div id="analysisMeta" class="analysis-meta">No analysis yet</div><button id="practiceNextButton" class="accent" hidden>Opponent analysis →</button></div></div>
         <div class="table-head"><span>#</span><span>Move</span><span>Evaluation</span><span>Line</span></div>
         <div id="analysisList" class="analysis-list"><div class="empty-state"><span class="empty-icon">↗</span><p>Run an analysis to compare the strongest moves.</p></div></div>
       </section>

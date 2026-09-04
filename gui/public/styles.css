@@ -145,6 +145,16 @@ button.accent { background: rgba(88,214,141,.14); color: #79e6a5; border-color: 
 .toggle-row { display: flex; flex-wrap: wrap; gap: 14px; margin: 17px 0 13px; padding-top: 14px; border-top: 1px solid var(--line); }
 .switch-label { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; cursor: pointer; }
 .switch-label input { accent-color: var(--green); }
+.practice-controls {
+  display: grid; grid-template-columns: auto minmax(150px, 1fr); align-items: end; gap: 10px 16px;
+  margin: 0 0 14px; padding: 12px; border: 1px solid var(--line); border-radius: 10px;
+  background: rgba(88,214,141,.035);
+}
+.practice-toggle { align-self: center; color: #d9ddd4; font-weight: 700; }
+.practice-team { display: grid; gap: 5px; color: var(--muted); font-size: 10px; }
+.practice-team select { height: 34px; padding: 0 9px; }
+.practice-controls p { grid-column: 1 / -1; margin: 0; color: #7f877b; font-size: 10px; line-height: 1.45; }
+.practice-controls.active { border-color: rgba(88,214,141,.3); background: rgba(88,214,141,.07); }
 .search-progress { margin: 0 0 14px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: rgba(0,0,0,.12); }
 .progress-label { display: flex; justify-content: space-between; gap: 12px; color: #cfd3ca; font-size: 10px; font-weight: 700; }
 .progress-track { height: 6px; margin-top: 8px; overflow: hidden; border-radius: 99px; background: rgba(255,255,255,.08); }
@@ -155,6 +165,7 @@ button.accent { background: rgba(88,214,141,.14); color: #79e6a5; border-color: 
 
 .analysis-card { min-height: 340px; }
 .analysis-header { padding: 17px 18px 14px; }
+.analysis-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
 .analysis-meta { color: var(--muted); font-size: 10px; text-align: right; line-height: 1.5; }
 .table-head, .analysis-row { display: grid; grid-template-columns: 28px 74px 78px minmax(0,1fr); align-items: center; column-gap: 8px; }
 .table-head { height: 30px; padding: 0 15px; color: #747a70; background: rgba(0,0,0,.13); border-block: 1px solid var(--line); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
@@ -162,6 +173,9 @@ button.accent { background: rgba(88,214,141,.14); color: #79e6a5; border-color: 
 .analysis-row { min-height: 52px; padding: 7px 15px; border-bottom: 1px solid rgba(255,255,255,.055); cursor: pointer; transition: background .13s; }
 .analysis-row:hover, .analysis-row.preview { background: rgba(255,255,255,.045); }
 .analysis-row.best { background: linear-gradient(90deg, rgba(58,190,110,.13), transparent 78%); box-shadow: inset 3px 0 var(--green); }
+.analysis-row.played { background: linear-gradient(90deg, rgba(224,185,74,.14), transparent 78%); box-shadow: inset 3px 0 var(--yellow); }
+.analysis-row.best.played { background: linear-gradient(90deg, rgba(88,214,141,.16), rgba(224,185,74,.08), transparent 82%); }
+.analysis-row.played .move-name::after { content: " your move"; margin-left: 6px; color: var(--yellow); font: 700 8px Inter, sans-serif; text-transform: uppercase; letter-spacing: .06em; }
 .rank { color: #72786d; font-size: 11px; }
 .move-name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; font-weight: 800; }
 .evaluation { font-size: 12px; font-weight: 800; color: #ddd; }

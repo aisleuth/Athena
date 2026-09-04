@@ -201,7 +201,7 @@ void CLI::analyze(std::istream& args) {
             limits.depth = 64;
         }
     }
-    max_lines = std::clamp<std::size_t>(max_lines, 1, 64);
+    max_lines = std::clamp<std::size_t>(max_lines, 1, chess::MOVE_NB);
     engine_.analyze(limits, max_lines, analysis_id);
 }
 

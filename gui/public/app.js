@@ -6,11 +6,16 @@ const historyElement = $("#moveHistory");
 
 const colors = { r: "Red", b: "Blue", y: "Yellow", g: "Green" };
 const teams = { r: "Red team", y: "Red team", b: "Blue team", g: "Blue team" };
+const practiceTeams = { ry: ["r", "y"], bg: ["b", "g"] };
 const glyphs = { K: "♚", Q: "♛", R: "♜", B: "♝", N: "♞", P: "♟" };
 const state = {
   position: null, selected: null, bestMove: null, variations: [], history: [],
   requestId: 0, analyzing: false, lastMove: null, analysisId: null,
   movePending: false, orientation: 0,
+  practice: {
+    enabled: false, team: "ry", phase: "idle", analysis: null,
+    attemptedMove: null,
+  },
 };
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -28,6 +33,30 @@ async function api(path, options = {}) {
 function setStatus(kind, text) {
   $("#statusDot").className = `status-dot ${kind}`;
   $("#statusText").textContent = text;
+}
+
+function isPracticeTurn(position = state.position) {
+  return Boolean(state.practice.enabled && position &&
+    practiceTeams[state.practice.team]?.includes(position.turn));
+}
+
+function updateActionControls() {
+  const practicing = isPracticeTurn();
+  const reviewing = state.practice.enabled && state.practice.phase === "review";
+  $("#analyzeButton").disabled = state.analyzing || practicing || reviewing;
+  $("#playBestButton").disabled = reviewing || !state.bestMove;
+  $("#practiceNextButton").hidden = !reviewing;
+  $("#practiceControls").classList.toggle("active", state.practice.enabled);
+  $("#practiceTeam").disabled = !state.practice.enabled;
+}
+
+function clearAnalysisDisplay(message, meta = "Moves hidden") {
+  state.bestMove = null;
+  state.variations = [];
+  analysisList.innerHTML = `<div class="empty-state"><span class="empty-icon">?</span><p>${message}</p></div>`;
+  $("#analysisMeta").textContent = meta;
+  drawArrow(null);
+  updateActionControls();
 }
 
 let toastTimer;
@@ -97,7 +126,13 @@ function renderPerspective() {
     tag.innerHTML = `<span>${colors[color]}</span><small>${teams[color]}</small>`;
   });
   const bottomColor = displayed[2];
-  $("#boardHint").textContent = `${colors[bottomColor]} perspective · Click a piece, then a highlighted square`;
+  if (state.practice.enabled && state.practice.phase === "review") {
+    $("#boardHint").textContent = "Review · the green arrow shows Athena's preferred move";
+  } else if (isPracticeTurn()) {
+    $("#boardHint").textContent = `Practice as ${practiceTeams[state.practice.team].map((color) => colors[color]).join(" + ")} · choose without hints`;
+  } else {
+    $("#boardHint").textContent = `${colors[bottomColor]} perspective · Click a piece, then a highlighted square`;
+  }
   $("#rotateBoardButton").setAttribute(
     "aria-label", `Rotate board 90 degrees clockwise; ${colors[displayed[1]]} will be at the bottom`);
 }
@@ -164,6 +199,10 @@ boardElement.addEventListener("pointerdown", (event) => {
 
 function handleSquareClick(square, value) {
   if (state.movePending) return;
+  if (state.practice.enabled && state.practice.phase === "review") {
+    toast("Continue to opponent analysis before making the next move");
+    return;
+  }
   if (state.selected) {
     if (chooseMove(state.selected, square)) return;
     state.selected = null;
@@ -177,6 +216,9 @@ function handleSquareClick(square, value) {
 
 function cancelAnalysisForBoardInput() {
   if (!state.analyzing) return;
+  // Practice analysis deliberately continues in the background while the
+  // player considers and enters a move; none of its output is rendered.
+  if (isPracticeTurn() && state.practice.phase === "thinking") return;
   ++state.requestId;
   state.analyzing = false;
   state.analysisId = null;
@@ -258,9 +300,10 @@ function formatScore(line) {
 }
 
 function renderAnalysis(result) {
+  $("#analysisEyebrow").textContent = "Ranked choices";
+  $("#analysisTitle").textContent = "Candidate moves";
   state.variations = result.variations;
   state.bestMove = result.variations[0]?.move ?? null;
-  $("#playBestButton").disabled = !state.bestMove;
   analysisList.replaceChildren();
   if (!result.variations.length) {
     analysisList.innerHTML = '<div class="empty-state"><span class="empty-icon">—</span><p>No legal moves or the search was stopped before producing a line.</p></div>';
@@ -279,6 +322,50 @@ function renderAnalysis(result) {
   const meta = result.stats;
   $("#analysisMeta").textContent = meta.nodes === undefined ? "Waiting for results" : `${meta.nodes.toLocaleString()} nodes · ${meta.timeMs} ms · sd ${meta.selectiveDepth}`;
   drawArrow(state.bestMove);
+  updateActionControls();
+}
+
+function renderPracticeReview(result, attemptedMove) {
+  const allLines = result?.variations ?? [];
+  const best = allLines[0] ?? null;
+  const attempted = allLines.find((line) => line.move === attemptedMove) ?? null;
+  const visibleCount = Number($("#multipv").value);
+  const lines = allLines.slice(0, visibleCount);
+  if (attempted && !lines.some((line) => line.move === attempted.move)) lines.push(attempted);
+
+  state.variations = lines;
+  state.bestMove = best?.move ?? null;
+  $("#analysisEyebrow").textContent = "Practice review";
+  $("#analysisTitle").textContent = "Your move compared";
+  analysisList.replaceChildren();
+
+  if (!lines.length) {
+    analysisList.innerHTML = '<div class="empty-state"><span class="empty-icon">—</span><p>The search stopped before producing a comparison. Try a longer search time or make the move again.</p></div>';
+  }
+  for (const line of lines) {
+    const row = document.createElement("div");
+    const played = line.move === attemptedMove;
+    row.className = `analysis-row ${line.rank === 1 ? "best" : ""} ${played ? "played" : ""}`;
+    const scoreClass = line.scoreType === "mate" ? "mate" : line.score > 0 ? "positive" : line.score < 0 ? "negative" : "";
+    row.innerHTML = `<span class="rank">${line.rank}</span><span class="move-name">${line.move}</span><span class="evaluation ${scoreClass}">${formatScore(line)}</span><span class="pv" title="${line.pv.join(" ")}">${line.pv.join(" ")}<small>d${line.depth}</small></span>`;
+    row.addEventListener("mouseenter", () => drawArrow(line.move));
+    row.addEventListener("mouseleave", () => drawArrow(state.bestMove));
+    row.addEventListener("click", () => { drawArrow(line.move); document.querySelectorAll(".analysis-row").forEach((item) => item.classList.toggle("preview", item === row)); });
+    analysisList.append(row);
+  }
+
+  if (!attempted) {
+    $("#analysisMeta").textContent = `${attemptedMove} · search stopped before this move received a score`;
+  } else if (best?.scoreType === "cp" && attempted.scoreType === "cp") {
+    const cost = Math.max(0, best.score - attempted.score) / 100;
+    $("#analysisMeta").textContent = `Your move ${formatScore(attempted)} · best ${formatScore(best)} · cost ${cost.toFixed(2)}`;
+  } else {
+    $("#analysisMeta").textContent = `Your move ${formatScore(attempted)} · best ${best ? formatScore(best) : "—"}`;
+  }
+
+  $("#searchProgress").classList.remove("active");
+  drawArrow(state.bestMove);
+  updateActionControls();
 }
 
 function renderProgress(result, active = true) {
@@ -313,15 +400,19 @@ function renderHistory() {
   });
 }
 
-async function analyzePosition({ playResponse = false } = {}) {
+async function analyzePosition({ playResponse = false, hidden = false, maxLines = null } = {}) {
   const requestId = ++state.requestId;
   state.analyzing = true;
-  setStatus("busy", "Searching");
-  $("#analyzeButton").disabled = true;
+  setStatus("busy", hidden ? "Thinking privately" : "Searching");
+  updateActionControls();
   try {
     const started = await api("/api/analyze", {
       method: "POST",
-      body: JSON.stringify({ depth: Number($("#depth").value), moveTime: Number($("#moveTime").value), multipv: Number($("#multipv").value) }),
+      body: JSON.stringify({
+        depth: Number($("#depth").value),
+        moveTime: Number($("#moveTime").value),
+        multipv: maxLines ?? Number($("#multipv").value),
+      }),
     });
     state.analysisId = started.id;
     let lastSequence = -1;
@@ -330,7 +421,9 @@ async function analyzePosition({ playResponse = false } = {}) {
       result = await api(`/api/analysis?id=${started.id}`);
       if (result.sequence !== lastSequence) {
         lastSequence = result.sequence;
-        if (result.variations.length) renderAnalysis(result);
+        if (hidden) {
+          if (result.variations.length) state.practice.analysis = result;
+        } else if (result.variations.length) renderAnalysis(result);
         renderProgress(result, result.status !== "complete");
       }
       if (result.status === "complete") break;
@@ -338,6 +431,11 @@ async function analyzePosition({ playResponse = false } = {}) {
       await delay(120);
     }
     if (requestId !== state.requestId) return;
+    if (hidden) {
+      if (result?.variations.length) state.practice.analysis = result;
+      setStatus("ready", "Your move");
+      return result;
+    }
     if (playResponse && $("#autoReply").checked && result?.variations[0]) {
       await playMove(result.variations[0].move, { userMove: false, analyzeAfter: true });
       return;
@@ -346,8 +444,68 @@ async function analyzePosition({ playResponse = false } = {}) {
   } catch (error) {
     if (requestId === state.requestId) { setStatus("error", "Search error"); toast(error.message); }
   } finally {
-    if (requestId === state.requestId) { state.analyzing = false; $("#analyzeButton").disabled = false; }
+    if (requestId === state.requestId) { state.analyzing = false; updateActionControls(); }
   }
+}
+
+async function finishPracticeAnalysis() {
+  const analysisId = state.analysisId;
+  if (!analysisId) return state.practice.analysis;
+
+  await api("/api/stop", { method: "POST" });
+  let result = state.practice.analysis;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const snapshot = await api(`/api/analysis?id=${analysisId}`);
+    if (snapshot.variations.length) result = snapshot;
+    if (snapshot.status === "complete" || snapshot.status === "error") break;
+    await delay(25);
+  }
+  ++state.requestId;
+  state.analyzing = false;
+  state.analysisId = null;
+  state.practice.analysis = result;
+  return result;
+}
+
+function beginPracticeTurn() {
+  state.practice.phase = "thinking";
+  state.practice.analysis = null;
+  state.practice.attemptedMove = null;
+  $("#analysisEyebrow").textContent = "Practice mode";
+  $("#analysisTitle").textContent = "Find the best move";
+  $("#practiceNote").textContent = "Athena is analyzing privately. Commit a move to reveal the comparison.";
+  clearAnalysisDisplay("Candidate moves and arrows are hidden. Choose the strongest move you can find.", "Private analysis");
+  renderBoard();
+  void analyzePosition({
+    hidden: true,
+    maxLines: Math.max(1, state.position?.legalMoves?.length ?? 1),
+  });
+}
+
+async function continueFromPracticeReview() {
+  if (state.practice.phase !== "review") return;
+  state.practice.phase = "opponent";
+  state.practice.analysis = null;
+  state.practice.attemptedMove = null;
+  $("#practiceNote").textContent = "Opponent turn: Athena's candidates and best-move arrow are visible normally.";
+  clearAnalysisDisplay("Analyzing the opponent's strongest continuations.", "Starting opponent analysis");
+  renderBoard();
+  await analyzePosition();
+}
+
+async function routeAnalysisForPosition({ force = false } = {}) {
+  if (state.practice.enabled && isPracticeTurn()) {
+    beginPracticeTurn();
+    return;
+  }
+  state.practice.phase = state.practice.enabled ? "opponent" : "idle";
+  if (state.practice.enabled) {
+    $("#practiceNote").textContent = "Opponent turn: Athena's candidates and best-move arrow are visible normally.";
+  }
+  renderBoard();
+  updateActionControls();
+  if (force || $("#autoAnalyze").checked) await analyzePosition();
+  else setStatus("ready", "Ready");
 }
 
 async function stopAnalysis() {
@@ -355,18 +513,30 @@ async function stopAnalysis() {
   await api("/api/stop", { method: "POST" });
   state.analyzing = false;
   state.analysisId = null;
-  $("#analyzeButton").disabled = false;
   $("#searchProgress").classList.remove("active");
   setStatus("ready", "Stopped");
+  updateActionControls();
 }
 
 async function playMove(move, { userMove = false, analyzeAfter = true } = {}) {
   if (!move || state.movePending) return;
   state.movePending = true;
+  const practiceAttempt = userMove && isPracticeTurn() && state.practice.phase === "thinking";
+  let practiceResult = null;
+  if (practiceAttempt) {
+    setStatus("busy", "Grading your move");
+    try {
+      practiceResult = await finishPracticeAnalysis();
+    } catch (error) {
+      toast(`Practice analysis stopped early: ${error.message}`);
+      ++state.requestId;
+      state.analyzing = false;
+    }
+  }
   ++state.requestId;
   state.analyzing = false;
   state.analysisId = null;
-  $("#analyzeButton").disabled = false;
+  updateActionControls();
   setStatus("busy", "Applying move");
   try {
     const position = await api("/api/move", { method: "POST", body: JSON.stringify({ move }) });
@@ -377,7 +547,17 @@ async function playMove(move, { userMove = false, analyzeAfter = true } = {}) {
     renderHistory();
     updatePosition(position);
     state.movePending = false;
-    if (analyzeAfter && $("#autoAnalyze").checked) {
+    if (practiceAttempt) {
+      state.practice.phase = "review";
+      state.practice.analysis = practiceResult;
+      state.practice.attemptedMove = move;
+      $("#practiceNote").textContent = "Review your move, then continue to visible opponent analysis.";
+      renderPracticeReview(practiceResult, move);
+      renderBoard();
+      setStatus("ready", "Review your move");
+    } else if (state.practice.enabled && isPracticeTurn(position)) {
+      beginPracticeTurn();
+    } else if (analyzeAfter && $("#autoAnalyze").checked) {
       await analyzePosition({ playResponse: userMove });
     } else setStatus("ready", "Ready");
   } catch (error) {
@@ -391,24 +571,26 @@ async function playMove(move, { userMove = false, analyzeAfter = true } = {}) {
 async function resetBoard() {
   ++state.requestId;
   state.analysisId = null;
-  $("#analyzeButton").disabled = false;
   setStatus("busy", "Resetting");
   const position = await api("/api/reset", { method: "POST", body: JSON.stringify({ setup: $("#setup").value }) });
   state.history = []; state.lastMove = null; state.bestMove = null; state.variations = [];
+  state.practice.phase = "idle";
+  state.practice.analysis = null; state.practice.attemptedMove = null;
   renderHistory(); renderAnalysis({ variations: [], stats: {} }); updatePosition(position);
-  if ($("#autoAnalyze").checked) analyzePosition(); else setStatus("ready", "Ready");
+  await routeAnalysisForPosition();
 }
 
 async function undoMove() {
   ++state.requestId;
   state.analysisId = null;
-  $("#analyzeButton").disabled = false;
   setStatus("busy", "Undoing");
   const position = await api("/api/undo", { method: "POST" });
   if (position.result === "undo empty") return toast("There is nothing to undo");
   state.history.pop(); state.lastMove = null; state.bestMove = null;
+  state.practice.phase = "idle";
+  state.practice.analysis = null; state.practice.attemptedMove = null;
   renderHistory(); updatePosition(position);
-  if ($("#autoAnalyze").checked) analyzePosition(); else setStatus("ready", "Ready");
+  await routeAnalysisForPosition();
 }
 
 $("#depth").addEventListener("input", (event) => $("#depthValue").textContent = event.target.value);
@@ -418,6 +600,27 @@ function updateTimeLabel() {
   $("#depth").disabled = unlimited;
   $("#depthValue").textContent = unlimited ? "∞" : $("#depth").value;
 }
+
+async function refreshPracticeMode() {
+  ++state.requestId;
+  if (state.analyzing) await api("/api/stop", { method: "POST" });
+  state.analyzing = false;
+  state.analysisId = null;
+  state.practice.enabled = $("#practiceMode").checked;
+  state.practice.team = $("#practiceTeam").value;
+  state.practice.phase = "idle";
+  state.practice.analysis = null;
+  state.practice.attemptedMove = null;
+  state.bestMove = null;
+  state.variations = [];
+  $("#practiceNote").textContent = "Your team's candidate moves stay hidden until after you commit a move.";
+  clearAnalysisDisplay(
+    state.practice.enabled ? "Preparing practice mode." : "Run an analysis to compare the strongest moves.",
+    state.practice.enabled ? "Practice mode" : "No analysis yet",
+  );
+  await routeAnalysisForPosition();
+}
+
 $("#moveTime").addEventListener("input", updateTimeLabel);
 $("#analyzeButton").addEventListener("click", () => analyzePosition());
 $("#stopButton").addEventListener("click", stopAnalysis);
@@ -428,6 +631,9 @@ $("#rotateBoardButton").addEventListener("click", () => {
   renderBoard();
 });
 $("#playBestButton").addEventListener("click", () => playMove(state.bestMove, { userMove: false }));
+$("#practiceNextButton").addEventListener("click", continueFromPracticeReview);
+$("#practiceMode").addEventListener("change", refreshPracticeMode);
+$("#practiceTeam").addEventListener("change", refreshPracticeMode);
 $("#setup").addEventListener("change", resetBoard);
 $("#hash").addEventListener("change", async (event) => {
   await api("/api/options", { method: "POST", body: JSON.stringify({ hash: Number(event.target.value) }) });
@@ -447,7 +653,8 @@ try {
   updatePosition(await api("/api/state"));
   setStatus("ready", "Ready");
   renderHistory();
-  if ($("#autoAnalyze").checked) analyzePosition();
+  updateActionControls();
+  await routeAnalysisForPosition();
 } catch (error) {
   setStatus("error", "Engine unavailable");
   toast(error.message);

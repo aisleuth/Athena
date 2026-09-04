@@ -66,6 +66,13 @@ analysis threads (one to four), and starting setup. Analysis automatically
 refreshes after a move by default; an optional setting lets Athena play one
 best response as well.
 
+Practice mode lets you choose Red+Yellow or Blue+Green. On the selected
+team's turns Athena analyzes privately: candidate moves, evaluations, and the
+best-move arrow remain hidden until you commit a move. It then reveals the
+preferred move, your move's evaluation, and the score lost relative to the
+best choice. Use `Opponent analysis →` to continue with normal visible
+analysis of the opposing player's reply.
+
 Ranked analysis uses iterative deepening and updates the move list, ratings,
 principal variations, and best-move arrow while the search is running. A
 search time of zero means unlimited analysis: Athena keeps advancing to deeper

@@ -190,13 +190,17 @@ const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url, "http://localhost");
     if (url.pathname === "/api/state" && request.method === "GET") {
+      // A newly opened or refreshed GUI must be able to obtain the board even
+      // when the previous page left an unbounded analysis running. Otherwise
+      // this request sits behind that analysis forever and the board is blank.
+      engine.interrupt();
       return json(response, 200, parseState(await engine.request("state", "state end")));
     }
     if (url.pathname === "/api/analyze" && request.method === "POST") {
       const body = await readJson(request);
       const depth = Math.min(64, Math.max(1, Number(body.depth) || 4));
       const moveTime = Math.min(120_000, Math.max(0, Number(body.moveTime) || 0));
-      const multipv = Math.min(64, Math.max(1, Number(body.multipv) || 8));
+      const multipv = Math.min(256, Math.max(1, Number(body.multipv) || 8));
       const id = nextAnalysisId++;
       engine.interrupt();
       analysisFrame = null;
